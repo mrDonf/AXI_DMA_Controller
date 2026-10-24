@@ -14,6 +14,8 @@ interface dma_ctrl_if #(
   logic                  boot_from_pc;
   logic [31:0]           boot_addr;
   logic                  boot_manager_ns;
+  logic [NUM_EVENTS-1:0] boot_irq_ns;       // CR3: events usable by non-secure threads
+  logic [31:0]           boot_periph_ns;    // CR4: peripherals usable by non-secure threads
   logic                  sw_rst_n;          // test-controlled reset (ANDed into rst_n)
 
   // Q-Channel (controller side) and core clock enable
@@ -27,6 +29,8 @@ interface dma_ctrl_if #(
     boot_from_pc    = 1'b0;
     boot_addr       = '0;
     boot_manager_ns = 1'b0;
+    boot_irq_ns     = '1;                   // default: every event / peripheral
+    boot_periph_ns  = '1;                   // usable by both worlds
     sw_rst_n        = 1'b1;
     qreqn           = 1'b1;
     clk_en          = 1'b1;

@@ -3,7 +3,8 @@
 //
 //            +-------------------------- dma_env ---------------------------+
 //            |  apb_agent --(RAL adapter/predictor)-- dma_reg_block          |
-//   APB  <-->|     |                                                        |
+//   APB  <-->|     |              (secure port)                             |
+//   APB NS<->|  apb_ns agent      (non-secure port, raw accesses)           |
 //            |  axi_agent (memory slave) --mon--> dma_scoreboard <-- jobs   |
 //   AXI  <-->|     |                                   ^                    |
 //            |  periph_agent[p] -------mon-------------+                    |
@@ -17,6 +18,7 @@ class dma_env extends uvm_env;
 
   dma_env_cfg                       cfg;
   apb_pkg::apb_agent                apb;
+  apb_pkg::apb_agent                apb_ns;
   axi_pkg::axi_agent                axi;
   dma_periph_pkg::periph_agent      per [dma_tb_params_pkg::NUM_PERIPH];
   dma_reg_block                     rm;
@@ -38,6 +40,8 @@ class dma_env extends uvm_env;
     // Agents
     uvm_config_db #(apb_pkg::apb_config)::set(this, "apb", "cfg", cfg.apb_cfg);
     apb = apb_pkg::apb_agent::type_id::create("apb", this);
+    uvm_config_db #(apb_pkg::apb_config)::set(this, "apb_ns", "cfg", cfg.apb_ns_cfg);
+    apb_ns = apb_pkg::apb_agent::type_id::create("apb_ns", this);
 
     cfg.axi_cfg.mem = cfg.mem;
     uvm_config_db #(axi_pkg::axi_config)::set(this, "axi", "cfg", cfg.axi_cfg);
@@ -79,7 +83,8 @@ class dma_env extends uvm_env;
       foreach (per[p]) per[p].mon.ap.connect(sb.per_imp);
     end
 
-    vsqr.apb_sqr = apb.sqr;
+    vsqr.apb_sqr    = apb.sqr;
+    vsqr.apb_ns_sqr = apb_ns.sqr;
     foreach (per[p]) vsqr.per_sqr[p] = per[p].sqr;
     vsqr.rm  = rm;
     vsqr.cfg = cfg;
@@ -101,7 +106,7 @@ class dma_env extends uvm_env;
   endfunction
 
   function uvm_reg_data_t expected_crd();
-    return (uvm_reg_data_t'(NUM_CH * MFIFO_LINES - 1) << 20) | (uvm_reg_data_t'(RQ_DEPTH - 1) << 16) |
+    return (uvm_reg_data_t'(MFIFO_LINES - 1) << 20) | (uvm_reg_data_t'(RQ_DEPTH - 1) << 16) |
            (uvm_reg_data_t'(RD_OUT - 1) << 12) | (uvm_reg_data_t'(WQ_DEPTH - 1) << 8) |
            (uvm_reg_data_t'(WR_OUT - 1) << 4) | $clog2(DATA_W / 8);
   endfunction

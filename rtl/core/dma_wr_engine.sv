@@ -44,9 +44,10 @@ module dma_wr_engine
   output logic [NUM_CH-1:0]       wq_full,
   input  logic [NUM_CH-1:0]       ch_flush,
 
-  // MFIFO pop side
+  // MFIFO pop side (pop_data shows the stream of channel mf_pop_ch)
   input  logic [MF_CNT_W-1:0]     mf_count    [NUM_CH],
-  input  logic [DATA_W-1:0]       mf_pop_data [NUM_CH],
+  input  logic [DATA_W-1:0]       mf_pop_data,
+  output logic [$clog2(NUM_CH > 1 ? NUM_CH : 2)-1:0] mf_pop_ch,
   output logic [NUM_CH-1:0]       mf_pop,
   output logic [$clog2(DATA_W/8):0] mf_pop_n,
 
@@ -212,7 +213,8 @@ module dma_wr_engine
   assign m_wvalid  = act_valid && w_pend;
   assign m_wstrb   = NB'(((1 << w_nbytes) - 1) << w_lane);
   logic [DATA_W-1:0] w_data_lanes;
-  assign w_data_lanes = (mf_pop_data[act_ch] << (w_lane * 8)) & w_lane_mask;
+  assign mf_pop_ch    = act_ch;
+  assign w_data_lanes = (mf_pop_data << (w_lane * 8)) & w_lane_mask;
   assign m_wdata   = act_x.zero ? '0 : DATA_W'(endian_swap(128'(w_data_lanes), act_x.swap));
   assign m_wlast   = (w_beat == act_x.len);
 

@@ -19,7 +19,7 @@ package dma330_dpi_pkg;
   typedef enum int {
     DM_EV_NONE = 0, DM_EV_NEED_CODE, DM_EV_LD, DM_EV_ST, DM_EV_STZ, DM_EV_ACK,
     DM_EV_SEV, DM_EV_WFE, DM_EV_END, DM_EV_KILL, DM_EV_FAULT, DM_EV_STARVED,
-    DM_EV_UNKNOWN, DM_EV_RUNAWAY
+    DM_EV_UNKNOWN, DM_EV_RUNAWAY, DM_EV_UNSURE
   } dm_ev_e;
 
   // dm_ack_t
@@ -44,6 +44,8 @@ package dma330_dpi_pkg;
                                                  input int unsigned num_periph,
                                                  input int unsigned mfifo_bytes);
   import "DPI-C" function void     dma330_dpi_free(input chandle h);
+  import "DPI-C" function void     dma330_dpi_security(input chandle h, input int unsigned irq_ns,
+                                                       input int unsigned periph_ns);
   import "DPI-C" function void     dma330_dpi_go(input chandle h, input int unsigned pc, input int ns);
   import "DPI-C" function void     dma330_dpi_periph_req(input chandle h, input int periph,
                                                          input int burst, input int last);
@@ -67,6 +69,8 @@ package dma330_dpi_pkg;
     return null;
   endfunction
   function automatic void dma330_dpi_free(chandle h); endfunction
+  function automatic void dma330_dpi_security(chandle h, int unsigned irq_ns,
+                                              int unsigned periph_ns); endfunction
   function automatic void dma330_dpi_go(chandle h, int unsigned pc, int ns); endfunction
   function automatic void dma330_dpi_periph_req(chandle h, int periph, int burst, int last); endfunction
   function automatic int dma330_dpi_step(chandle h); return int'(DM_EV_UNKNOWN); endfunction

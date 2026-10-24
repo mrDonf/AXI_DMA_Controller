@@ -1,13 +1,14 @@
 //==============================================================================
 // dma330_core.sv
 //------------------------------------------------------------------------------
-// Single-clock DMA controller core (everything in the 'clk' domain).
+// Single-clock DMA controller core (everything in the 'clk' domain; the top
+// level drives 'clk' with the AXI clock).
 //
-//            APB                      AXI4 master
-//             |                           ^
-//        +----v-----+   +-----------------+------------------+
+//        APB (S)  APB (NS)                AXI4 master
+//             |    |                          ^
+//        +----v----v+   +-----------------+------------------+
 //        | dma_regs |   |            dma_datapath            |
-//        +----+-----+   |  rd_engine   mfifo[ch]   wr_engine |
+//        +----+-----+   |  rd_engine   mfifo (pool) wr_engine|
 //             | debug   +--^-----------------^----------^----+
 //        +----v------+     | ld/st           | i-fetch  | acks
 //        | manager   |--+  |                 |          |
@@ -33,7 +34,7 @@ module dma330_core
   parameter int          WQ_DEPTH    = 4,       // per-channel write queue
   parameter int          RD_OUT      = 4,       // per-channel outstanding reads
   parameter int          WR_OUT      = 4,       // per-channel outstanding writes
-  parameter int          MFIFO_LINES = 32,      // per-channel MFIFO lines (pow2)
+  parameter int          MFIFO_LINES = 128,     // MFIFO lines shared by all channels
   parameter int          IC_LINES    = 8,       // instruction cache lines
   parameter int          IC_BEATS    = 4,       // beats per cache line
   parameter logic [31:0] PERIPH_ID   = 32'h0000_0330,
@@ -46,8 +47,10 @@ module dma330_core
   input  logic                         boot_from_pc,
   input  logic [31:0]                  boot_addr,
   input  logic                         boot_manager_ns,
+  input  logic [NUM_EVENTS-1:0]        boot_irq_ns,
+  input  logic [NUM_PERIPH-1:0]        boot_periph_ns,
 
-  // APB slave
+  // APB slave, secure port
   input  logic                         psel,
   input  logic                         penable,
   input  logic                         pwrite,
@@ -56,6 +59,16 @@ module dma330_core
   output logic                         pready,
   output logic [31:0]                  prdata,
   output logic                         pslverr,
+
+  // APB slave, non-secure port
+  input  logic                         psel_ns,
+  input  logic                         penable_ns,
+  input  logic                         pwrite_ns,
+  input  logic [11:0]                  paddr_ns,
+  input  logic [31:0]                  pwdata_ns,
+  output logic                         pready_ns,
+  output logic [31:0]                  prdata_ns,
+  output logic                         pslverr_ns,
 
   // AXI4 master
   output logic                         m_awvalid,
@@ -155,10 +168,14 @@ module dma330_core
   // Debug
   logic                   mgr_dbg_valid, mgr_dbg_done;
   logic [INSN_W-1:0]      mgr_dbg_insn;
-  logic [NUM_CH-1:0]      ch_dbg_kill, ch_dbg_fault;
+  logic [NUM_CH-1:0]      ch_dbg_kill, ch_dbg_fault, ch_dbg_evnt_fault;
+
+  // Security of events / peripherals (CR3 / CR4)
+  logic [NUM_EVENTS-1:0]  irq_ns;
+  logic [NUM_PERIPH-1:0]  periph_ns;
 
   // Channels <-> data path
-  logic [NUM_CH-1:0]      ld_valid, ld_ready, ld_lockup;
+  logic [NUM_CH-1:0]      ld_req, ld_valid, ld_ready, ld_lockup;
   logic [NUM_CH-1:0]      st_valid, st_ready, st_short;
   xfer_t                  ld_xfer [NUM_CH];
   xfer_t                  st_xfer [NUM_CH];
@@ -181,6 +198,7 @@ module dma330_core
   // Low power
   logic                   q_run, core_idle, ic_idle, dbg_busy;
   logic                   r_psel, r_pready, r_pslverr;
+  logic                   r_psel_ns, r_pready_ns, r_pslverr_ns;
   logic [NUM_PERIPH-1:0]  pc_dr_valid, pc_dr_ready;
 
   // i-cache refill path
@@ -224,9 +242,21 @@ module dma330_core
     .pready          (r_pready),
     .prdata          (prdata),
     .pslverr         (r_pslverr),
+    .psel_ns         (r_psel_ns),
+    .penable_ns      (penable_ns),
+    .pwrite_ns       (pwrite_ns),
+    .paddr_ns        (paddr_ns),
+    .pwdata_ns       (pwdata_ns),
+    .pready_ns       (r_pready_ns),
+    .prdata_ns       (prdata_ns),
+    .pslverr_ns      (r_pslverr_ns),
     .boot_from_pc    (boot_from_pc),
     .boot_addr       (boot_addr),
     .boot_manager_ns (boot_manager_ns),
+    .boot_irq_ns     (boot_irq_ns),
+    .boot_periph_ns  (boot_periph_ns),
+    .irq_ns          (irq_ns),
+    .periph_ns       (periph_ns),
     .dsr             (dsr),
     .dpc             (dpc),
     .ftrd            (ftrd),
@@ -254,6 +284,7 @@ module dma330_core
     .mgr_dbg_done    (mgr_dbg_done),
     .ch_dbg_kill     (ch_dbg_kill),
     .ch_dbg_fault    (ch_dbg_fault),
+    .ch_dbg_evnt_fault (ch_dbg_evnt_fault),
     .dbg_sev_valid   (dbg_sev_valid),
     .dbg_sev_event   (dbg_sev_event),
     .dbg_busy        (dbg_busy)
@@ -273,6 +304,8 @@ module dma330_core
     .boot_from_pc    (boot_from_pc),
     .boot_addr       (boot_addr),
     .boot_manager_ns (boot_manager_ns),
+    .irq_ns          (irq_ns),
+    .periph_ns       (periph_ns),
     .ic_inv_all      (ic_inv_all),
     .ic_inv_req      (ic_inv_req[MGR]),
     .ic_req          (ic_req[MGR]),
@@ -319,7 +352,10 @@ module dma330_core
       .go_ns         (go_ns),
       .dbg_kill      (ch_dbg_kill[ch]),
       .dbg_fault     (ch_dbg_fault[ch]),
+      .dbg_evnt_fault(ch_dbg_evnt_fault[ch]),
       .wd_fault      (wd_lockup_fault[ch]),
+      .irq_ns        (irq_ns),
+      .periph_ns     (periph_ns),
       .ic_inv_all    (ic_inv_all),
       .ic_inv_req    (ic_inv_req[ch]),
       .ic_req        (ic_req[ch]),
@@ -341,6 +377,7 @@ module dma330_core
       .flush_valid   (flush_valid[ch]),
       .flush_periph  (flush_periph[ch]),
       .flush_ready   (flush_ready[ch]),
+      .ld_req        (ld_req[ch]),
       .ld_valid      (ld_valid[ch]),
       .ld_xfer       (ld_xfer[ch]),
       .ld_ready      (ld_ready[ch]),
@@ -486,6 +523,7 @@ module dma330_core
   ) u_datapath (
     .clk           (clk),
     .rst_n         (rst_n),
+    .ld_req        (ld_req),
     .ld_valid      (ld_valid),
     .ld_xfer       (ld_xfer),
     .ld_ready      (ld_ready),
@@ -611,7 +649,7 @@ module dma330_core
   // transfer.
   always_comb begin
     core_idle = (dsr[3:0] inside {ST_STOPPED, ST_FAULTING}) && ic_idle && !dbg_busy &&
-                !(|rd_busy) && !(|wr_busy) && !(|da_valid) && !psel;
+                !(|rd_busy) && !(|wr_busy) && !(|da_valid) && !psel && !psel_ns;
     for (int ch = 0; ch < NUM_CH; ch++)
       if (!(ch_csr[ch][3:0] inside {ST_STOPPED, ST_FAULTING})) core_idle = 1'b0;
   end
@@ -630,11 +668,14 @@ module dma330_core
 
   // While quiescent, APB transfers wait (PREADY = 0) and peripheral requests
   // are not accepted (DRREADY = 0).
-  // (the register file is zero-wait-state: r_pready is always 1, and it sees
-  // no transfer, hence reports no error, while quiescent)
+  // (the register file sees no transfer, hence reports no error, while
+  // quiescent)
   assign r_psel      = psel && q_run;
-  assign pready      = q_run;
+  assign pready      = q_run && r_pready;
   assign pslverr     = r_pslverr;
+  assign r_psel_ns   = psel_ns && q_run;
+  assign pready_ns   = q_run && r_pready_ns;
+  assign pslverr_ns  = r_pslverr_ns;
   assign pc_dr_valid = dr_valid & {NUM_PERIPH{q_run}};
   assign dr_ready    = pc_dr_ready & {NUM_PERIPH{q_run}};
 
@@ -652,10 +693,8 @@ module dma330_core
       $fatal(1, "dma330_core: DATA_W must be 32, 64 or 128");
     if ((1 << ID_W) - 1 <= NUM_CH)
       $fatal(1, "dma330_core: ID_W too small (needs channel IDs + IFETCH ID)");
-    if (MFIFO_LINES * DATA_W / 8 < 2 * 16 * DATA_W / 8)
-      $fatal(1, "dma330_core: MFIFO_LINES must hold two max-length bursts");
-    if ((MFIFO_LINES & (MFIFO_LINES - 1)) != 0 || NUM_CH * MFIFO_LINES > 1024)
-      $fatal(1, "dma330_core: MFIFO_LINES must be a power of two, NUM_CH*MFIFO_LINES <= 1024");
+    if (MFIFO_LINES < 32 || MFIFO_LINES > 1024)
+      $fatal(1, "dma330_core: MFIFO_LINES must be 32..1024 (two max-length bursts, CRD field)");
     if ((IC_BEATS & (IC_BEATS - 1)) != 0 || IC_BEATS * DATA_W / 8 < 8 || IC_LINES < 1 || IC_LINES > 16)
       $fatal(1, "dma330_core: IC_BEATS must be a power of two (line >= 8 bytes), IC_LINES 1..16");
     if (RQ_DEPTH > 16 || WQ_DEPTH > 16 || RD_OUT > 8 || WR_OUT > 8)

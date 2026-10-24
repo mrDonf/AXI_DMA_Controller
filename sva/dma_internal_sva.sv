@@ -26,57 +26,90 @@ module sva_sync_fifo (
 endmodule
 
 //------------------------------------------------------------------------------
-// MFIFO byte buffer: the data path must reserve space before pushing and only
-// pop bytes that are present.
+// Shared MFIFO pool: a push that needs a new line always finds one (the data
+// path reserved it), only bytes that are present are popped, and the line
+// lists stay consistent with the pool.
 //------------------------------------------------------------------------------
 module sva_mfifo #(
+  parameter int NUM_CH = 4,
   parameter int DATA_W = 64,
-  parameter int LINES  = 32
+  parameter int LINES  = 128
 ) (
-  input logic                              clk,
-  input logic                              rst_n,
-  input logic                              flush,
-  input logic                              push_en,
-  input logic [$clog2(DATA_W/8):0]         push_n,
-  input logic                              pop_en,
-  input logic [$clog2(DATA_W/8):0]         pop_n,
-  input logic [$clog2(DATA_W/8*LINES):0]   count
+  input logic                                       clk,
+  input logic                                       rst_n,
+  input logic [NUM_CH-1:0]                          flush,
+  input logic                                       do_push,
+  input logic                                       do_pop,
+  input logic                                       alloc,
+  input logic                                       free_any,
+  input logic [$clog2(NUM_CH > 1 ? NUM_CH : 2)-1:0] push_ch,
+  input logic [$clog2(NUM_CH > 1 ? NUM_CH : 2)-1:0] pop_ch,
+  input logic [$clog2(DATA_W/8):0]                  push_n,
+  input logic [$clog2(DATA_W/8):0]                  pop_n,
+  input logic [$clog2(DATA_W/8*LINES):0]            count  [NUM_CH],
+  input logic [$clog2(LINES+1)-1:0]                 nlines [NUM_CH],
+  input logic [$clog2(DATA_W/8)-1:0]                wr_off [NUM_CH],
+  input logic [LINES-1:0]                           own
 );
-  localparam int CAP = DATA_W / 8 * LINES;
+  localparam int NB = DATA_W / 8;
 
   default clocking cb @(posedge clk); endclocking
-  default disable iff (!rst_n || flush);
+  default disable iff (!rst_n);
 
-  MFIFO_NO_OVERFLOW:  assert property (push_en |-> int'(count) + int'(push_n) <= CAP);
-  MFIFO_NO_UNDERFLOW: assert property (pop_en  |-> int'(pop_n) <= int'(count));
-  MFIFO_PUSH_NONZERO: assert property (push_en |-> push_n != 0);
-  MFIFO_C_FULLISH:    cover  property (int'(count) > CAP / 2);
+  int unsigned lines_sum;
+  always_comb begin
+    lines_sum = 0;
+    for (int c = 0; c < NUM_CH; c++) lines_sum += nlines[c];
+  end
+
+  MFIFO_ALLOC_HAS_LINE: assert property (alloc |-> free_any);
+  MFIFO_NO_UNDERFLOW:   assert property (do_pop |-> int'(pop_n) <= int'(count[pop_ch]));
+  MFIFO_PUSH_NONZERO:   assert property (do_push |-> push_n != 0);
+  // Every line in use belongs to exactly one list
+  MFIFO_LINES_OWNED:    assert property (lines_sum == $countones(own));
+  MFIFO_C_FULLISH:     cover  property ($countones(own) > LINES * 3 / 4);
+  MFIFO_C_POOL_FULL:    cover  property (&own);
+
+  for (genvar c = 0; c < NUM_CH; c++) begin : g_ch
+    MFIFO_OFF_HAS_LINE: assert property (disable iff (!rst_n || flush[c])
+        wr_off[c] != '0 |-> nlines[c] != '0);
+    MFIFO_BYTES_FIT:    assert property (disable iff (!rst_n || flush[c])
+        int'(count[c]) <= int'(nlines[c]) * NB);
+  end
 endmodule
 
 //------------------------------------------------------------------------------
-// Dual-clock FIFO: gray pointers change by at most one bit per clock, no
-// write when full, no read when empty.
+// Data path line reservation: the pool is never over-committed, and a channel
+// never uses more lines than it has reserved.
 //------------------------------------------------------------------------------
-module sva_async_fifo #(
-  parameter int ADDR_W = 3
+module sva_datapath #(
+  parameter int NUM_CH      = 4,
+  parameter int MFIFO_LINES = 128
 ) (
-  input logic              wr_clk,
-  input logic              wr_rst_n,
-  input logic              rd_clk,
-  input logic              rd_rst_n,
-  input logic [ADDR_W:0]   wgray,
-  input logic [ADDR_W:0]   rgray,
-  input logic              wr_valid,
-  input logic              wr_ready,
-  input logic              rd_valid,
-  input logic              rd_ready
+  input logic                                clk,
+  input logic                                rst_n,
+  input logic [$clog2(MFIFO_LINES+1)+3:0]    used,
+  input logic [$clog2(MFIFO_LINES+1)-1:0]    held      [NUM_CH],
+  input logic [$clog2(MFIFO_LINES+1)-1:0]    mf_nlines [NUM_CH],
+  input logic [NUM_CH-1:0]                   mf_flush,
+  input logic [NUM_CH-1:0]                   ld_lockup,
+  input logic [NUM_CH-1:0]                   ld_req,
+  input logic [NUM_CH-1:0]                   stuck,
+  input logic                                deadlock
 );
-  AFIFO_WGRAY_ONEHOT: assert property (@(posedge wr_clk) disable iff (!wr_rst_n)
-      $onehot0(wgray ^ $past(wgray)));
-  AFIFO_RGRAY_ONEHOT: assert property (@(posedge rd_clk) disable iff (!rd_rst_n)
-      $onehot0(rgray ^ $past(rgray)));
-  AFIFO_C_FULL:       cover property (@(posedge wr_clk) disable iff (!wr_rst_n)
-      wr_valid && !wr_ready);
+  default clocking cb @(posedge clk); endclocking
+  default disable iff (!rst_n);
+
+  DP_POOL_NOT_OVERCOMMITTED: assert property (int'(used) <= MFIFO_LINES);
+  DP_LOCKUP_ONLY_ON_LOAD:    assert property ((ld_lockup & ~ld_req) == '0);
+
+  for (genvar c = 0; c < NUM_CH; c++) begin : g_ch
+    DP_LINES_RESERVED: assert property (disable iff (!rst_n || mf_flush[c])
+        mf_nlines[c] <= held[c]);
+  end
+
+  DP_C_WAIT_FOR_SPACE: cover property (|stuck && !deadlock);
+  DP_C_DEADLOCK:       cover property (deadlock);
 endmodule
 
 //------------------------------------------------------------------------------

@@ -91,8 +91,10 @@ python run_regression.py -t <test> -c sync async --seeds 5 -j 8
 | TC-20 | `dma_lowpower_test` | Directed + random | trung bình | LP |
 | TC-21 | `dma_rand_prog_test` | Random (chương trình ngẫu nhiên, C model) | trung bình | CM-01..05 |
 | TC-22 | `dma_cmodel_mix_test` | Random (mọi loại job + chương trình ngẫu nhiên) | trung bình | CM-01..05, AXI-01 |
+| TC-23 | `dma_mfifo_share_test` | Directed | trung bình | MF-01..03, DP-08 |
+| TC-24 | `dma_security_test` | Directed | trung bình | SEC-01..12 |
 
-\* Toàn bộ 132 lần chạy (22 test × 2 cấu hình × 3 seed) mất khoảng 3 phút với 14 tiến trình song song.
+\* Toàn bộ 144 lần chạy (24 test × 2 cấu hình × 3 seed) mất khoảng 3–4 phút với 4 tiến trình song song.
 
 Ma trận test × tính năng:
 
@@ -323,7 +325,6 @@ Với mỗi kịch bản lỗi của kênh (`run_fault`):
 | 5 | Peripheral quá lớn | `DMAWFP P7, B` | FTR[6] |
 | 6 | Load size 16 B > bus | `CCR` src size 4; `DMALD` | FTR[7] |
 | 7 | Store size 16 B > bus | `CCR` dst size 4; `DMALD; DMAST` | FTR[7] |
-| 8 | MFIFO lock-up | 128 B/burst; `DMALD` × 3 | FTR[12] |
 | 9 | Store không có dữ liệu | `DMAST` | FTR[13] |
 | 10 | Lỗi đọc | SAR = vùng SLVERR; `LD; ST; WMB; END` | FTR[18] |
 | 11 | Lỗi ghi | DAR = vùng DECERR | FTR[17] |
@@ -340,6 +341,7 @@ Với mỗi kịch bản lỗi của kênh (`run_fault`):
 | 20b | Store burst vượt 4 KB | `DAR = dst + 0xFF0`; `DMALD; DMAST` | FTR[7], không có AW |
 | 20c | Swap 64 bit với beat 4 B | `CCR.swap = 3`, `dst_size = 2` | FTR[7] |
 | 20d | Swap 32 bit với `DAR` lệch 2 byte | `CCR.swap = 2`, `DAR = dst + 2` | FTR[7] |
+| 8 | MFIFO self lock-up (chạy sau khi bystander xong) | 128 B/burst; `DMALD` × (`MFIFO_BYTES/128` + 1) = 9, không store | FTR[12] |
 
 Với kịch bản 10, 11, 12 còn kiểm tra thêm `FAR`: lỗi đọc thì `FAR = 0xE000_0000` (beat lỗi đầu tiên), lỗi ghi thì `FAR = 0xE001_0000` (burst lỗi), lỗi fetch thì `FAR = 0xE002_0000` (PC). Sau phần phục hồi, `FAR` của kênh victim phải bằng 0 (`DMAGO` đã xóa).
 
@@ -350,6 +352,8 @@ Kịch bản lỗi manager (giữ `dbg_lock` để không kênh nào được `D
 | 21 | `DMAGO C7` | FTRD[1] + FTRD[30] | Debug `DMANOP` khi đang lỗi không xóa lỗi; `DMAKILL` → `DSR` Stopped |
 | 22 | `DMAWFE` (không phải lệnh debug hợp lệ) | FTRD[0] + FTRD[30] | như trên |
 | 23 | `DMASEV E31` | FTRD[4] + FTRD[30] | như trên |
+
+Kịch bản 8 chạy sau khi bystander xong: với MFIFO dùng chung, kênh chiếm gần hết pool làm kênh khác phải chờ hoặc deadlock cùng nó, nên không thể đòi hỏi cách ly ở kịch bản này (xem TC-23).
 
 Cuối test: xóa vùng lỗi, chạy 2 job M2M trên kênh victim (phục hồi). Bystander phải hoàn tất 6 job đúng dữ liệu (cách ly lỗi).
 
@@ -545,12 +549,68 @@ Kiểm tra:
 
 | Mục | Nội dung |
 |---|---|
-| Mục tiêu | Trộn mọi loại job có sẵn và chương trình ngẫu nhiên trên cùng 4 kênh dưới back-pressure rất nặng (cũng đưa `AFIFO_C_FULL` của FIFO AW/AR về trạng thái được phủ) |
+| Mục tiêu | Trộn mọi loại job có sẵn và chương trình ngẫu nhiên trên cùng 4 kênh dưới back-pressure rất nặng |
 | Sequence | `dma_traffic_vseq`: `kinds = {M2M, FILL, LOOP2D, M2P, P2M, PERIPH_MIXED, P2M_MIXED, COND_LOOP, ISA_MIX, RAND ×3}`, 4 kênh × 12 job |
-| Cấu hình | `axi_cfg.set_choke()` (AWREADY/ARREADY 10 %, WREADY 25 %, latency B/R 5–40 chu kỳ: các hàng đợi outstanding và FIFO CDC phía AW/AR đầy), `daready_pct = 40` cho mọi peripheral |
+| Cấu hình | `axi_cfg.set_choke()` (AWREADY/ARREADY 10 %, WREADY 25 %, latency B/R 5–40 chu kỳ: các hàng đợi outstanding đầy), `daready_pct = 40` cho mọi peripheral |
 | VP | CM-01..05, AXI-01 |
 
 Kiểm tra: như TC-21 cho job `JOB_RAND`; với các job có danh sách op là **đối chiếu hai bộ dự đoán** (generator và C model) trước khi chạy, cộng đối chiếu thanh ghi cuối job.
+
+---
+
+### TC-23 `dma_mfifo_share_test`
+
+| Mục | Nội dung |
+|---|---|
+| Mục tiêu | MFIFO dùng chung, cấp phát động: một kênh dùng được gần hết pool; kênh không có chỗ thì chờ; deadlock giữa hai kênh được phát hiện |
+| Sequence | `dma_mfifo_vseq` |
+| Thiết lập | Kênh A, B chọn ngẫu nhiên (khác nhau). Burst 16 × 8 B = 128 B = 16 line; pool 1 KB = 8 burst. Chương trình viết tay, scoreboard bỏ qua hai kênh này; dữ liệu đích được so với nguồn trong memory model |
+| VP | MF-01..03, DP-08 |
+
+| # | Kịch bản | Kiểm tra |
+|---|---|---|
+| 1 | Kênh A: 7 `DMALD` (896 B = 112 line) rồi 7 `DMAST`; kênh B: tương tự với `SAR` +3, `DAR` +5 | Không lỗi, 896 / 891 byte đúng (phần chia tĩnh cũ chỉ cho 256 B/kênh) |
+| 2 | A: 7 `DMALD`, `DMAWFE E12`, 7 `DMAST`. Khi A đang chờ event, B chạy `DMALP 2 { LD; LD; ST; ST }` | `DMALD` thứ hai của B không vừa: B ở Executing, `CPC` = `DMALD` đó, `FSRC = 0` sau 3000 chu kỳ. Debug `DMASEV E12` → A store, B chạy tiếp, cả hai copy đúng |
+| 3 | A: 6 `DMALD` (96 line), `DMAWFE E12`, `DMALD`... B: 3 `DMALD` (B giữ 32 line, `DMALD` thứ ba chờ). Kênh C (không giữ line): `DMALD; DMAST; DMAWMB; DMASEV; DMAEND`, `DMALD` chờ vì pool đã đầy | Trước khi thả A: B và C chỉ chờ, không lỗi. Sau debug `DMASEV E12`: A cũng kẹt ở `DMALD`, không kênh nào có store → A và B lỗi `mfifo_err` (FTR = `0x1000` đúng một bit), `CPC` tại `DMALD` kẹt, `FSRC` = đúng hai bit đó. C không giữ line nên không bị lỗi; khi line của A, B về pool, C chạy xong và copy đúng. `DMAKILL` A, B, `irq_abort` = 0 |
+| 4 | Mọi kênh chạy 2 job M2M song song, sau đó lặp lại kịch bản 1 (`SAR` +1, `DAR` +6) | Scoreboard; pool đã trống lại sau deadlock |
+
+---
+
+### TC-24 `dma_security_test`
+
+| Mục | Nội dung |
+|---|---|
+| Mục tiêu | Security kiểu TrustZone: hai cổng APB, `CR3`/`CR4`, quyền của thread NS, cổng NS chỉ thấy tài nguyên NS |
+| Sequence | `dma_security_vseq` |
+| Thiết lập | Trước reset: `boot_irq_ns = 0x00FF` (event 0–7 NS, 8–15 secure), `boot_periph_ns = 0b0011` (peripheral 0, 1 NS), `boot_manager_ns = 0`. Kênh 0 secure, kênh 1 NS. Truy cập cổng NS bằng `apb_rd`/`apb_wr`/`dbg_exec_ns` (agent `apb_ns`) |
+| VP | SEC-01..12 |
+
+Giai đoạn 1 (manager secure):
+
+| # | Kịch bản | Kiểm tra |
+|---|---|---|
+| 1 | Đọc `CR3`, `CR4`, `CR0`, `DSR` trên hai cổng | `CR3 = 0x00FF`, `CR4 = 0x3`, `CR0[2] = 0`; `DSR` trên cổng NS = 0 |
+| 2 | Một job M2M secure trên kênh 0, một job NS trên kênh 1 (scoreboard kiểm `AxPROT[1]`) | Cổng NS: mọi thanh ghi của kênh 0 đọc 0, của kênh 1 bằng cổng S; `CSR.CNS` đúng |
+| 3 | `INTEN`: S ghi 0, NS ghi `0xFFFF` → S đọc `0x00FF`; S ghi `0xFFFF`, NS ghi 0 → S đọc `0xFF00`, NS đọc 0 | Chỉ bit NS bị cổng NS thay đổi |
+| 4 | Debug `DMASEV E9`, `DMASEV E3`; NS ghi `INTCLR = 0xFFFF` | `INT_EVENT_RIS` S = `0x208`, NS = `0x8`; `INTMIS` NS = `0x8`; sau INTCLR của NS: `irq[3] = 0`, `irq[9] = 1` |
+| 5 | S ghi `WD = 0x0010_0001`; NS đọc, NS ghi 0 | NS đọc 0; `WD` không đổi |
+| 6 | `DBGINST0/1` ghi khác nhau trên hai cổng | Mỗi cổng đọc lại giá trị của mình |
+| 7 | Hai cổng đồng thời: mỗi cổng 64 lần ghi rồi đọc `DBGINST1` | Mọi lần đọc trả đúng giá trị của cổng đó (va chạm cùng chu kỳ được tuần tự hóa) |
+| 7b | Cổng NS đọc địa chỉ không map, ghi vào `CR0` (read-only) | `PSLVERR_NS = APB_SLVERR` (1 ở cấu hình async); `CR0` không đổi |
+| 8 | Cổng NS: `DMAGO` qua manager secure; `DMASEV` tới kênh secure; `DMAKILL` tới kênh secure đang chạy job 2 KB | Không có tác dụng: kênh không chạy, không event, job hoàn tất đúng; `DBGSTATUS = 0`, `FSRD = 0` |
+| 9 | Kênh NS chạy: `DMASEV E9`, `DMAWFE E9`, `DMAWFP P2`, `DMAFLUSHP P2`, `DMALDPS P2`, `DMASTPS P2` | Lần lượt `ch_evnt_err` ×2, `ch_periph_err` ×4 (FTR đúng một bit); `FSRC` thấy được từ cổng NS; `DMAKILL` qua cổng NS đưa kênh về Stopped, `FTR = 0` |
+| 10 | Debug `DMASEV E9` qua cổng NS tới kênh NS đang dừng | FTR = `ch_evnt_err` + `dbg_instr` |
+| 11 | Kênh NS: `DMAFLUSHP P1; DMASEV E3; DMAEND`; debug `DMASEV E3` qua cổng NS. Kênh secure: `DMAFLUSHP P2; DMASEV E9; DMASEV E3; DMAEND` | Không lỗi; ack flush đúng peripheral; các interrupt đúng |
+| 12 | Kênh secure lỗi (`DMASEV 20`); manager secure lỗi (`DMAGO C7`) | Cổng S thấy `FSRC`/`FSRD`; cổng NS đọc `FSRC`, `FTR0`, `FSRD`, `FTRD`, `DPC` = 0; `DMAKILL` qua cổng NS bị bỏ qua; `DMAKILL` qua cổng S phục hồi |
+
+Giai đoạn 2: reset với `boot_manager_ns = 1`.
+
+| # | Kịch bản | Kiểm tra |
+|---|---|---|
+| 13 | Đọc cấu hình | `CR0[2] = 1`, `DSR` trên cổng NS = `0x200` |
+| 14 | Job M2M NS chỉ qua cổng NS: `INTEN`, `DMAGO` (debug NS), chờ irq, `INTCLR`, `CSR` | Scoreboard (`AxPROT[1] = 1`), trạng thái kiến trúc cuối job |
+| 15 | Qua cổng NS: `DMAGO` kênh secure; `DMASEV E9`. Qua cổng S: `DMAGO` kênh secure | `dmago_err`, `mgr_evnt_err`, `dmago_err`; mỗi lần cổng NS thấy `FSRD`/`FTRD` và `DMAKILL` qua cổng NS phục hồi manager |
+| 16 | Qua cổng NS: manager `DMASEV E3` | `irq[3]`, không lỗi |
 
 ---
 

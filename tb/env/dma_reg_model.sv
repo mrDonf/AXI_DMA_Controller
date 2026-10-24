@@ -210,8 +210,8 @@ class dma_reg_block extends uvm_reg_block;
     CR0 = add32("CR0", 'hE00, "RO", cr0);
     CR1 = add32("CR1", 'hE04, "RO", cr1);
     CR2 = add32("CR2", 'hE08, "RO", 0, 1);
-    CR3 = add32("CR3", 'hE0C, "RO");
-    CR4 = add32("CR4", 'hE10, "RO");
+    CR3 = add32("CR3", 'hE0C, "RO", 0, 1);           // boot_irq_ns / boot_periph_ns: set per test
+    CR4 = add32("CR4", 'hE10, "RO", 0, 1);
     CRD = add32("CRD", 'hE14, "RO", crd);
     WD = dma_reg_wd::type_id::create("WD");
     WD.configure(this);

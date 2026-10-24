@@ -137,9 +137,6 @@ class dma_fault_vseq extends dma_base_vseq;
         a = prologue(src, dst, dma330_asm::ccr(1, 3, 1, 1, 4, 1));  a.dmald(); a.dmast();
         run_fault("store burst size wider than the bus", a, dma330_pkg::FTC_CH_RDWR_ERR);
 
-        a = prologue(src, dst, ccr8x16);  a.dmald(); a.dmald(); a.dmald();
-        run_fault("loads overflow MFIFO", a, dma330_pkg::FTC_MFIFO_ERR);
-
         a = prologue(src, dst, ccr8x16);  a.dmast();
         run_fault("store without data", a, dma330_pkg::FTC_ST_DATA_UNAVAIL);
 
@@ -209,6 +206,13 @@ class dma_fault_vseq extends dma_base_vseq;
                       dma330_pkg::FTD_MGR_EVNT_ERR);
       end
     join
+
+    // Loads of more bytes than the whole shared MFIFO, with no store: the
+    // channel can never fit them (self lock-up, mfifo_err). Run without the
+    // bystander: a channel that fills the shared pool also starves the others.
+    a = prologue(src, dst, ccr8x16);
+    repeat (dma_tb_params_pkg::MFIFO_BYTES / 128 + 1) a.dmald();
+    run_fault("loads overflow MFIFO", a, dma330_pkg::FTC_MFIFO_ERR);
 
     p_sequencer.cfg.axi_cfg.clear_err_regions();
 

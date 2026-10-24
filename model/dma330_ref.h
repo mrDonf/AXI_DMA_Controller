@@ -48,7 +48,7 @@ extern "C" {
 #define DM_REQ_DEPTH       256    /* queued peripheral requests per peripheral */
 #define DM_CODE_SEGS       16
 #define DM_CODE_SEG_BYTES  64
-#define DM_STREAM_BYTES    1024
+#define DM_STREAM_BYTES    16384  /* largest MFIFO: 1024 lines of 16 bytes  */
 
 /*------------------------------------------------------------------------------
  * Configuration: must equal the DUT parameters
@@ -57,7 +57,7 @@ typedef struct {
     unsigned bus_bytes;       /* DATA_W / 8                                    */
     unsigned num_events;      /* NUM_EVENTS                                    */
     unsigned num_periph;      /* NUM_PERIPH                                    */
-    unsigned mfifo_bytes;     /* MFIFO capacity of one channel                 */
+    unsigned mfifo_bytes;     /* whole shared MFIFO: MFIFO_LINES * bus_bytes   */
     unsigned max_insns;       /* run-away guard (0 = default 100000)           */
 } dma330_cfg_t;
 
@@ -78,7 +78,8 @@ typedef enum {
     DM_EV_FAULT,              /* channel fault, see ftr / ftr_maybe            */
     DM_EV_STARVED,            /* DMAWFP but no request queued                  */
     DM_EV_UNKNOWN,            /* program used a register it never wrote        */
-    DM_EV_RUNAWAY             /* instruction budget exhausted                  */
+    DM_EV_RUNAWAY,            /* instruction budget exhausted                  */
+    DM_EV_UNSURE              /* DMALD whose MFIFO lock-up depends on timing   */
 } dm_ev_kind_t;
 
 typedef enum { DM_ACK_SINGLE = 0, DM_ACK_BURST = 1, DM_ACK_FLUSH = 2 } dm_ack_t;
@@ -106,7 +107,7 @@ typedef struct {
     unsigned wfe_invalidate;
     /* FAULT */
     uint32_t ftr;             /* fault bits that are certain                   */
-    uint32_t ftr_maybe;       /* bits whose presence depends on timing         */
+    uint32_t ftr_maybe;       /* bits whose presence depends on timing (0 now) */
 } dm_event_t;
 
 /*------------------------------------------------------------------------------
@@ -121,6 +122,10 @@ typedef struct dma330 dma330_t;
 
 dma330_t*         dma330_new(const dma330_cfg_t* cfg);
 void              dma330_free(dma330_t* m);
+
+/* Event / peripheral security (CR3 / CR4, bit = 1: usable by a non-secure
+ * thread). Default after dma330_new: everything non-secure. */
+void              dma330_security(dma330_t* m, uint32_t irq_ns, uint32_t periph_ns);
 
 /* DMAGO: start a program at pc. Register values are unknown again. */
 void              dma330_go(dma330_t* m, uint32_t pc, int ns);

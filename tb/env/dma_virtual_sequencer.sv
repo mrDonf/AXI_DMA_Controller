@@ -5,14 +5,16 @@ class dma_virtual_sequencer extends uvm_sequencer;
 
   `uvm_component_utils(dma_virtual_sequencer)
 
-  apb_pkg::apb_sequencer           apb_sqr;
+  apb_pkg::apb_sequencer           apb_sqr;         // secure port (RAL front door)
+  apb_pkg::apb_sequencer           apb_ns_sqr;      // non-secure port
   dma_periph_pkg::periph_sequencer per_sqr [dma_tb_params_pkg::NUM_PERIPH];
   dma_reg_block                    rm;
   dma_env_cfg                      cfg;
   dma_scoreboard                   sb;
   dma_coverage                     cov;
 
-  // DBGINST0/DBGINST1/DBGCMD must be written as one atomic group
+  // DBGINST0/DBGINST1/DBGCMD must be written as one atomic group (on either
+  // port: both share the manager's debug busy flag)
   semaphore                        dbg_lock;
 
   function new(string name, uvm_component parent);

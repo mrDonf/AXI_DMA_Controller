@@ -1,9 +1,13 @@
 //==============================================================================
 // tb_top.sv - testbench top
 //------------------------------------------------------------------------------
-//   ASYNC = 0 : every interface runs on the core clock (CDC logic bypassed)
-//   ASYNC = 1 : APB, AXI and each peripheral run on their own unrelated
-//               clocks -> exercises the APB/AXI async bridges and the
+// The DMA core runs on the AXI clock (aclk, 200 MHz). The Q-Channel model can
+// gate the DMA's branch of aclk; the AXI slave VIP stays on the free-running
+// clock.
+//
+//   ASYNC = 0 : APB and every peripheral run on aclk (CDC logic bypassed)
+//   ASYNC = 1 : APB (both ports) and each peripheral run on their own
+//               unrelated clocks -> exercises the APB async bridges and the
 //               peripheral handshake synchronizers
 //==============================================================================
 `timescale 1ns/1ps
@@ -19,31 +23,28 @@ module tb_top;
   //============================================================================
   // Clocks and reset
   //============================================================================
-  logic core_clk = 1'b0;            // 200 MHz
+  logic aclk = 1'b0;                // 200 MHz AXI + DMA core clock
   logic apb_clk_a = 1'b0;           //  ~79 MHz
-  logic axi_clk_a = 1'b0;           // ~135 MHz
   logic [NUM_PERIPH-1:0] per_clk_a = '0;
   logic por_rst_n = 1'b0;           // power-on reset
   logic rst_n;                      // system reset (power-on AND test reset)
 
-  always #2.5 core_clk  = ~core_clk;
+  always #2.5 aclk = ~aclk;
 
-  // Gated DMA core clock (Q-Channel tests). Latch-based glitch-free gate.
-  logic core_clk_en_l = 1'b1;
-  logic dut_clk;
-  always_latch if (!core_clk) core_clk_en_l = ctrl.clk_en;
-  assign dut_clk = core_clk & core_clk_en_l;
+  // Gated DMA clock (Q-Channel tests). Latch-based glitch-free gate.
+  logic aclk_en_l = 1'b1;
+  logic dut_aclk;
+  always_latch if (!aclk) aclk_en_l = ctrl.clk_en;
+  assign dut_aclk = aclk & aclk_en_l;
   always #6.3 apb_clk_a = ~apb_clk_a;
-  always #3.7 axi_clk_a = ~axi_clk_a;
   for (genvar p = 0; p < NUM_PERIPH; p++) begin : g_per_clk
     always #(4.1 + 1.3 * p) per_clk_a[p] = ~per_clk_a[p];
   end
 
-  logic pclk, aclk;
+  logic pclk;
   logic [NUM_PERIPH-1:0] periph_clk;
-  assign pclk       = ASYNC ? apb_clk_a : core_clk;
-  assign aclk       = ASYNC ? axi_clk_a : core_clk;
-  assign periph_clk = ASYNC ? per_clk_a : {NUM_PERIPH{core_clk}};
+  assign pclk       = ASYNC ? apb_clk_a : aclk;
+  assign periph_clk = ASYNC ? per_clk_a : {NUM_PERIPH{aclk}};
 
   initial begin
     por_rst_n = 1'b0;
@@ -55,9 +56,10 @@ module tb_top;
   //============================================================================
   // Interfaces
   //============================================================================
-  apb_if #(32, 32)                 apb  (.pclk(pclk), .presetn(rst_n));
-  axi_if #(ID_W, 32, DATA_W)       axi  (.aclk(aclk), .aresetn(rst_n));
-  dma_ctrl_if #(NUM_EVENTS)        ctrl (.clk(core_clk), .rst_n(rst_n));
+  apb_if #(32, 32)                 apb    (.pclk(pclk), .presetn(rst_n));   // secure port
+  apb_if #(32, 32)                 apb_ns (.pclk(pclk), .presetn(rst_n));   // non-secure port
+  axi_if #(ID_W, 32, DATA_W)       axi    (.aclk(aclk), .aresetn(rst_n));
+  dma_ctrl_if #(NUM_EVENTS)        ctrl   (.clk(aclk), .rst_n(rst_n));
 
   // One interface per peripheral, explicitly on its own clock. (An instance
   // array would map periph_clk[NUM_PERIPH-1] to per[0].)
@@ -96,21 +98,20 @@ module tb_top;
     .IC_BEATS     (IC_BEATS),
     .PERIPH_ID    (PERIPH_ID),
     .APB_ASYNC    (ASYNC),
-    .AXI_ASYNC    (ASYNC),
     .PERIPH_ASYNC (ASYNC),
     .APB_SLVERR   (ASYNC)        // async snapshot also checks PSLVERR reporting
   ) u_dut (
-    .clk             (dut_clk),
-    .rst_n           (rst_n),
+    .aclk            (dut_aclk),
+    .aresetn         (rst_n),
     .pclk            (pclk),
     .presetn         (rst_n),
-    .aclk            (aclk),
-    .aresetn         (rst_n),
     .periph_clk      (periph_clk),
     .periph_rst_n    ({NUM_PERIPH{rst_n}}),
     .boot_from_pc    (ctrl.boot_from_pc),
     .boot_addr       (ctrl.boot_addr),
     .boot_manager_ns (ctrl.boot_manager_ns),
+    .boot_irq_ns     (ctrl.boot_irq_ns),
+    .boot_periph_ns  (ctrl.boot_periph_ns[NUM_PERIPH-1:0]),
 
     .psel            (apb.psel),
     .penable         (apb.penable),
@@ -120,6 +121,15 @@ module tb_top;
     .pready          (apb.pready),
     .prdata          (apb.prdata),
     .pslverr         (apb.pslverr),
+
+    .psel_ns         (apb_ns.psel),
+    .penable_ns      (apb_ns.penable),
+    .pwrite_ns       (apb_ns.pwrite),
+    .paddr_ns        (apb_ns.paddr[11:0]),
+    .pwdata_ns       (apb_ns.pwdata),
+    .pready_ns       (apb_ns.pready),
+    .prdata_ns       (apb_ns.prdata),
+    .pslverr_ns      (apb_ns.pslverr),
 
     .m_axi_awvalid   (axi.awvalid),  .m_axi_awready (axi.awready),
     .m_axi_awid      (axi.awid),     .m_axi_awaddr  (axi.awaddr),
@@ -181,6 +191,12 @@ module tb_top;
     .pready (apb.pready), .prdata (apb.prdata), .pslverr (apb.pslverr)
   );
 
+  apb_slave_sva #(.ADDR_W(12), .DATA_W(32), .SLVERR_EN(ASYNC)) u_apb_ns_sva (
+    .pclk (pclk), .presetn (rst_n), .psel (apb_ns.psel), .penable (apb_ns.penable),
+    .pwrite (apb_ns.pwrite), .paddr (apb_ns.paddr[11:0]), .pwdata (apb_ns.pwdata),
+    .pready (apb_ns.pready), .prdata (apb_ns.prdata), .pslverr (apb_ns.pslverr)
+  );
+
   for (genvar p = 0; p < NUM_PERIPH; p++) begin : g_per_sva
     dma_periph_sva u_per_sva (
       .clk (periph_clk[p]), .rst_n (rst_n),
@@ -190,11 +206,12 @@ module tb_top;
   end
 
   dma_lpi_sva u_lpi_sva (
-    .clk (core_clk), .rst_n (rst_n),
+    .clk (aclk), .rst_n (rst_n),
     .qreqn (ctrl.qreqn), .qacceptn (ctrl.qacceptn), .qdeny (ctrl.qdeny), .qactive (ctrl.qactive),
     .awvalid (axi.awvalid), .wvalid (axi.wvalid), .arvalid (axi.arvalid),
     .davalid (|davalid), .irq_abort (ctrl.irq_abort),
-    .psel (apb.psel), .penable (apb.penable), .pready (apb.pready)
+    .psel (apb.psel), .penable (apb.penable), .pready (apb.pready),
+    .psel_ns (apb_ns.psel), .penable_ns (apb_ns.penable), .pready_ns (apb_ns.pready)
   );
 
   dma_sva_bind u_sva_binds ();
@@ -210,6 +227,7 @@ module tb_top;
   initial begin
     $timeformat(-9, 1, " ns", 12);
     uvm_config_db #(virtual apb_if #(32, 32))::set(null, "uvm_test_top", "apb_vif", apb);
+    uvm_config_db #(virtual apb_if #(32, 32))::set(null, "uvm_test_top", "apb_ns_vif", apb_ns);
     uvm_config_db #(virtual axi_if #(ID_W, 32, DATA_W))::set(null, "uvm_test_top", "axi_vif", axi);
     uvm_config_db #(virtual dma_ctrl_if #(NUM_EVENTS))::set(null, "uvm_test_top", "ctrl_vif", ctrl);
     uvm_config_db #(int)::set(null, "uvm_test_top", "async_mode", int'(ASYNC));

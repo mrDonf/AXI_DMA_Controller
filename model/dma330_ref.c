@@ -38,6 +38,7 @@ struct dma330 {
     uint32_t valid;                      /* bit r: register r holds a known value */
     int      ns, req_burst, req_last;
     uint32_t ftr, ftr_maybe, events;
+    uint32_t irq_ns, periph_ns;          /* CR3 / CR4                          */
     int      running;
     unsigned long insns;
 
@@ -48,6 +49,9 @@ struct dma330 {
     /* bytes loaded and not yet stored (= "unclaimed" in the data path) */
     uint8_t  stream[DM_STREAM_BYTES + 256];
     unsigned stream_len;
+    /* possible MFIFO line offsets (bit o) of the oldest unclaimed byte, once
+     * the issued stores have drained: an empty stream may restart at 0 */
+    uint32_t off_mask;
 
     /* instruction bytes supplied so far */
     struct { uint32_t base; unsigned len; uint8_t d[DM_CODE_SEG_BYTES]; } seg[DM_CODE_SEGS];
@@ -164,7 +168,15 @@ dma330_t* dma330_new(const dma330_cfg_t* cfg)
     m->cfg = *cfg;
     while ((1u << m->max_size) < cfg->bus_bytes) m->max_size++;
     m->max_insns = cfg->max_insns ? cfg->max_insns : DEF_MAX_INSN;
+    m->irq_ns    = 0xFFFFFFFFu;
+    m->periph_ns = 0xFFFFFFFFu;
     return m;
+}
+
+void dma330_security(dma330_t* m, uint32_t irq_ns, uint32_t periph_ns)
+{
+    m->irq_ns    = irq_ns;
+    m->periph_ns = periph_ns;
 }
 
 void dma330_free(dma330_t* m) { free(m); }
@@ -182,6 +194,7 @@ void dma330_go(dma330_t* m, uint32_t pc, int ns)
     m->running = 1;
     m->insns = 0;
     m->stream_len = 0;
+    m->off_mask = 1u;
     m->nseg = 0;
     m->sup_n = 0;
     m->pend = PEND_NONE;
@@ -235,7 +248,7 @@ static dm_ev_kind_t finish(dma330_t* m, dm_ev_kind_t k)
     m->ev.kind = k;
     m->ev.pc   = m->pc;
     if (k == DM_EV_END || k == DM_EV_KILL || k == DM_EV_FAULT ||
-        k == DM_EV_UNKNOWN || k == DM_EV_RUNAWAY)
+        k == DM_EV_UNKNOWN || k == DM_EV_RUNAWAY || k == DM_EV_UNSURE)
         m->running = 0;
     return k;
 }
@@ -283,8 +296,11 @@ static void build_beats(dma330_t* m, uint32_t addr, unsigned size, unsigned len,
         if (!zero) swap_beat(m->beat_data[b], bus, swap);
     }
     if (!zero) {
+        unsigned r = taken % bus;
         m->stream_len -= taken;
         memmove(m->stream, m->stream + taken, m->stream_len);
+        if (r) m->off_mask = ((m->off_mask << r) | (m->off_mask >> (bus - r))) & ((1u << bus) - 1u);
+        if (m->stream_len == 0) m->off_mask |= 1u;
     }
 }
 
@@ -341,7 +357,7 @@ dm_ev_kind_t dma330_step(dma330_t* m)
         uint8_t  op, b1;
         unsigned len, i, num5, bytes;
         insn_t   cls;
-        int      cond_ok, is_load, is_store, do_xfer;
+        int      cond_ok, is_load, is_store, do_xfer, ev_bad, pe_bad, unsure;
         uint32_t fault, lock;
         uint16_t imm16;
         uint32_t imm32;
@@ -367,19 +383,23 @@ dm_ev_kind_t dma330_step(dma330_t* m)
         is_store = (cls == I_ST) || (cls == I_STP) || (cls == I_STZ);
         do_xfer  = (is_load || is_store) && cond_ok;
 
-        /* Execute-time faults (dma_channel.sv, exec_fault) */
-        fault = 0;
-        lock  = 0;
-        bytes = 0;
+        /* Execute-time faults (dma_channel.sv, exec_fault). A non-secure
+         * thread may only use the non-secure events / peripherals (CR3 / CR4). */
+        ev_bad = num5 >= m->cfg.num_events || (m->ns && !((m->irq_ns >> num5) & 1u));
+        pe_bad = num5 >= m->cfg.num_periph || (m->ns && !((m->periph_ns >> num5) & 1u));
+        fault  = 0;
+        lock   = 0;
+        unsure = 0;
+        bytes  = 0;
         switch (cls) {
         case I_UNDEF: case I_GO:  fault |= FT_UNDEF_INSTR; break;
         case I_MOV:               if (b1 > 2) fault |= FT_OPERAND_INVALID; break;
-        case I_SEV: case I_WFE:   if (num5 >= m->cfg.num_events) fault |= FT_CH_EVNT_ERR; break;
-        case I_WFP: case I_FLUSHP: if (num5 >= m->cfg.num_periph) fault |= FT_CH_PERIPH_ERR; break;
+        case I_SEV: case I_WFE:   if (ev_bad) fault |= FT_CH_EVNT_ERR; break;
+        case I_WFP: case I_FLUSHP: if (pe_bad) fault |= FT_CH_PERIPH_ERR; break;
         default: break;
         }
         if (do_xfer) {
-            if ((cls == I_LDP || cls == I_STP) && num5 >= m->cfg.num_periph)
+            if ((cls == I_LDP || cls == I_STP) && pe_bad)
                 fault |= FT_CH_PERIPH_ERR;
             if (!VALID(m, DM_R_CCR) || !VALID(m, is_load ? DM_R_SAR : DM_R_DAR))
                 return finish(m, DM_EV_UNKNOWN);
@@ -387,9 +407,25 @@ dm_ev_kind_t dma330_step(dma330_t* m)
                 unsigned sz = CCR_SRC_SIZE(m->ccr), ln = CCR_SRC_LEN(m->ccr), inc = CCR_SRC_INC(m->ccr);
                 bytes = dm_burst_bytes(m->sar, sz, ln, inc);
                 if (sz > m->max_size || dm_crosses_4k(m->sar, sz, ln, inc)) fault |= FT_CH_RDWR_ERR;
-                /* Never fits, however many stores drain: the data path reports
-                 * the lock-up once the pending stores are gone. */
-                if (m->stream_len + bytes > m->cfg.mfifo_bytes) lock = FT_MFIFO_ERR;
+                /* MFIFO lock-up (dma_datapath.sv), channel alone in the pool.
+                 * Once the stores already issued have drained, the channel
+                 * holds the lines of its unclaimed bytes; with this load it
+                 * needs ceil((off + stream_len + bytes) / NB) lines, where off
+                 * is the line offset of its oldest byte. An empty stream holds
+                 * no line (a single load always fits) and may restart at offset
+                 * 0, depending on timing: when the possible offsets disagree
+                 * the outcome is not predictable. */
+                if (m->stream_len != 0) {
+                    unsigned nb = m->cfg.bus_bytes, lines = m->cfg.mfifo_bytes / nb, off;
+                    int n_lock = 0, n_fit = 0;
+                    for (off = 0; off < nb; off++) {
+                        if (!((m->off_mask >> off) & 1u)) continue;
+                        if ((off + m->stream_len + bytes + nb - 1) / nb > lines) n_lock++;
+                        else                                                     n_fit++;
+                    }
+                    if (n_lock && !n_fit) lock   = FT_MFIFO_ERR;
+                    else if (n_lock)      unsure = 1;
+                }
             } else {
                 unsigned sz = CCR_DST_SIZE(m->ccr), ln = CCR_DST_LEN(m->ccr), inc = CCR_DST_INC(m->ccr);
                 unsigned sw = CCR_SWAP(m->ccr);
@@ -402,15 +438,16 @@ dm_ev_kind_t dma330_step(dma330_t* m)
             }
         }
         if (fault || lock) {
-            /* A lock-up seen together with another fault depends on whether a
-             * store was still draining when the instruction was first executed */
-            m->ftr       = fault | (fault ? 0 : lock);
-            m->ftr_maybe = fault ? lock : 0;
+            /* The data path only checks for a lock-up when the load has no
+             * other fault */
+            m->ftr       = fault ? fault : lock;
+            m->ftr_maybe = 0;
             memset(&m->ev, 0, sizeof m->ev);
             m->ev.ftr       = m->ftr;
             m->ev.ftr_maybe = m->ftr_maybe;
             return finish(m, DM_EV_FAULT);
         }
+        if (unsure) return finish(m, DM_EV_UNSURE);
 
         m->insns++;
 

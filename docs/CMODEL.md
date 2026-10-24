@@ -72,7 +72,7 @@ Dữ liệu được lấy từ `axi_mem_model` **tại thời điểm model ch�
 
 ## 3. Giao diện C
 
-Chi tiết trong `model/dma330_ref.h`. Cấu hình phải bằng tham số DUT: `bus_bytes = DATA_W/8`, `num_events`, `num_periph`, `mfifo_bytes` (dung lượng MFIFO của một kênh).
+Chi tiết trong `model/dma330_ref.h`. Cấu hình phải bằng tham số DUT: `bus_bytes = DATA_W/8`, `num_events`, `num_periph`, `mfifo_bytes` (dung lượng của toàn bộ MFIFO dùng chung = `MFIFO_LINES × DATA_W/8`). Security của event/peripheral (`CR3`/`CR4`) đặt bằng `dma330_security(m, irq_ns, periph_ns)`; mặc định mọi event/peripheral là non-secure (trùng chân boot mặc định của TB).
 
 | Hàm | Vai trò |
 |---|---|
@@ -93,7 +93,8 @@ Sự kiện `DM_EV_*`:
 | `ACK` | Ack peripheral (`periph`, loại single/burst/flush), sau `LD` của `DMALDP`, sau `ST` của `DMASTP`, hoặc `DMAFLUSHP` |
 | `SEV`, `WFE` | Event được báo; `DMAWFE` luôn coi là đã thỏa |
 | `END`, `KILL` | Kết thúc bình thường (CPC đứng tại lệnh này) |
-| `FAULT` | Lỗi kênh: `ftr` (bit chắc chắn) và `ftr_maybe` (bit phụ thuộc thời gian) |
+| `FAULT` | Lỗi kênh: `ftr` (bit chắc chắn); `ftr_maybe` luôn bằng 0 từ v1.3 |
+| `UNSURE` | `DMALD` mà việc có lock-up MFIFO hay không phụ thuộc thời gian (offset line, xem 4.1); model dừng ở lệnh đó |
 | `STARVED` | `DMAWFP` mà chưa có request nào được xếp |
 | `UNKNOWN` | Chương trình dùng thanh ghi chưa ghi (SAR/DAR/CCR/LC) |
 | `RUNAWAY` | Quá ngân sách lệnh (mặc định 100 000) |
@@ -122,8 +123,13 @@ Tất cả theo `DESIGN_SPEC.md` (mục 4.5, 4.7, 5.9, 7). Đối chiếu với 
 
 Model tính đúng các điều kiện của bảng 5.9 (`undef_instr`, `operand_invalid`, `ch_evnt_err`, `ch_periph_err`, `ch_rdwr_err`, `mfifo_err`, `st_data_unavailable`) tại đúng lệnh gây lỗi; CPC là địa chỉ lệnh đó.
 
-* `mfifo_err` xảy ra khi `unclaimed + bytes > mfifo_bytes`. Khi đó dù mọi store đang chờ có xả hết, chỗ trống vẫn không đủ, nên DUT chắc chắn báo lỗi. Điều kiện này không phụ thuộc thời gian.
-* Nếu cùng một lệnh còn gây lỗi khác (ví dụ `ch_rdwr_err`), việc bit 12 có mặt hay không phụ thuộc vào store có còn đang xả lúc lệnh được thực thi lần đầu. Model đưa bit này vào `ftr_maybe` thay vì `ftr`.
+* Thread non-secure (`dma330_go(..., ns = 1)`): event secure trong `DMASEV`/`DMAWFE` → `ch_evnt_err`; peripheral secure trong `DMAWFP`/`DMAFLUSHP`/`DMALDP`/`DMASTP` → `ch_periph_err` (đặc tả 4.5).
+* `mfifo_err` (self lock-up, kênh chạy một mình trong pool dùng chung). Sau khi các store đã issue xả hết, kênh giữ các line chứa byte chưa store; với lệnh load này nó cần `ceil((off + unclaimed + bytes) / NB)` line, trong đó `off` là offset trong line của byte cũ nhất. Stream rỗng không giữ line nào (một load luôn vừa) và có thể bắt đầu lại ở offset 0, tùy thời điểm store xả xong. Model giữ tập các offset có thể có (`off_mask`: xoay theo số byte mỗi store, thêm 0 mỗi khi stream rỗng):
+  * mọi offset đều vượt `mfifo_bytes / NB` line → `mfifo_err` chắc chắn;
+  * chỉ một số offset vượt → kết quả phụ thuộc thời gian, model báo `UNSURE` (bộ sinh chương trình ngẫu nhiên loại bỏ chương trình đó);
+  * với chương trình mà mọi store có số byte là bội của `NB` (thường gặp) tập này chỉ có offset 0, nên không bao giờ `UNSURE`.
+* Lock-up chỉ được báo khi lệnh load không có lỗi khác (như datapath: `ld_req` chỉ bật khi lệnh không có lỗi khác). Vì vậy không còn trường hợp "bit 12 có thể có" (`ftr_maybe = 0`).
+* Model không mô hình các kênh khác: chờ chỗ trống và deadlock giữa nhiều kênh (`dma_mfifo_share_test`) nằm ngoài model. Bộ sinh chương trình ngẫu nhiên giữ mỗi kênh dưới `MFIFO_LINES/NUM_CH` line dữ liệu chưa store, nên không có chờ hay deadlock giữa các kênh.
 * Lỗi bus (`RRESP`/`BRESP`/fetch) và watchdog là bất đồng bộ, **không** thuộc phạm vi model.
 * Sau lỗi, traffic của các burst đã issue trước đó là không xác định (hàng đợi bị flush), nên chỉ kiểm `FTR`/`CPC`, không kiểm traffic.
 
@@ -183,7 +189,7 @@ Chạy riêng test độc lập (không cần simulator):
 gcc -O2 -Wall -Wextra -o dma330_ref_test model/dma330_ref_test.c model/dma330_ref.c && ./dma330_ref_test
 ```
 
-`dma330_ref_test` có 133 kiểm tra known-answer, mọi giá trị kỳ vọng tính tay từ đặc tả (copy align và không align, FIXED, vòng lặp lồng, endian swap, `S`/`B`, `DMALPFE`, ack, fault, quay vòng 32 bit, giao thức `NEED_CODE`/`STARVED`/`RUNAWAY`).
+`dma330_ref_test` có 147 kiểm tra known-answer, mọi giá trị kỳ vọng tính tay từ đặc tả (copy align và không align, FIXED, vòng lặp lồng, endian swap, `S`/`B`, `DMALPFE`, ack, fault, quay vòng 32 bit, giao thức `NEED_CODE`/`STARVED`/`RUNAWAY`, lock-up MFIFO theo line và `UNSURE`, security event/peripheral của thread NS).
 
 ---
 
@@ -191,4 +197,4 @@ gcc -O2 -Wall -Wextra -o dma330_ref_test model/dma330_ref_test.c model/dma330_re
 
 * Thêm lệnh mới: cập nhật `decode_op`/`insn_len` và `case` trong `dma330_step`, thêm known-answer vào `dma330_ref_test.c`, rồi cập nhật bảng mục 4.
 * Cấu hình DUT khác (`DATA_W`, `MFIFO_LINES`): `dma_cmodel.build_model` đọc `dma_tb_params_pkg`, model hỗ trợ bus 1–16 byte; chưa chạy regression với cấu hình khác mặc định.
-* Hướng tiếp theo: dự đoán `FTR`/`CPC` cho chương trình cố ý sai bằng `ftr`/`ftr_maybe` (model đã có sẵn); mô hình manager (`DMAGO`, boot).
+* Hướng tiếp theo: dự đoán `FTR`/`CPC` cho chương trình cố ý sai bằng `ftr` (model đã có sẵn); mô hình manager (`DMAGO`, boot); truyền `CR3`/`CR4` thật của test vào model (`dma_cmodel` hiện dùng mặc định toàn NS).

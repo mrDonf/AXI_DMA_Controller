@@ -43,6 +43,24 @@ class dma_base_vseq extends uvm_sequence;
     if (status != UVM_IS_OK) `uvm_error("REG", {"read failed: ", r.get_name()})
   endtask
 
+  // Raw APB accesses outside the RAL, on the secure (ns = 0) or the
+  // non-secure (ns = 1) port. The RAL only maps the secure port.
+  task apb_wr(bit ns, bit [11:0] addr, bit [31:0] data);
+    apb_pkg::apb_write_seq wr = apb_pkg::apb_write_seq::type_id::create("apb_wr");
+    wr.addr = addr;
+    wr.data = data;
+    wr.start(ns ? p_sequencer.apb_ns_sqr : p_sequencer.apb_sqr, this);
+    if (wr.slverr) `uvm_error("REG", $sformatf("%s write 0x%03h: PSLVERR", ns ? "NS" : "S", addr))
+  endtask
+
+  task apb_rd(bit ns, bit [11:0] addr, output bit [31:0] data);
+    apb_pkg::apb_read_seq rd = apb_pkg::apb_read_seq::type_id::create("apb_rd");
+    rd.addr = addr;
+    rd.start(ns ? p_sequencer.apb_ns_sqr : p_sequencer.apb_sqr, this);
+    if (rd.slverr) `uvm_error("REG", $sformatf("%s read 0x%03h: PSLVERR", ns ? "NS" : "S", addr))
+    data = rd.data;
+  endtask
+
   //============================================================================
   // Debug instruction interface
   //============================================================================
@@ -65,6 +83,18 @@ class dma_base_vseq extends uvm_sequence;
     reg_wr(rm.DBGINST0, inst0);
     reg_wr(rm.DBGINST1, inst1);
     reg_wr(rm.DBGCMD, 0);
+  endtask
+
+  // Debug instruction through the non-secure port (its own DBGINST0/1)
+  task dbg_exec_ns(bit to_channel, int unsigned ch, bit [7:0] insn[$]);
+    bit [31:0] v;
+    while (insn.size() < 6) insn.push_back(8'h00);
+    p_sequencer.dbg_lock.get();
+    do apb_rd(1, 12'hD00, v); while (v[0]);
+    apb_wr(1, 12'hD08, {insn[1], insn[0], 5'd0, 3'(ch), 7'd0, to_channel});
+    apb_wr(1, 12'hD0C, {insn[5], insn[4], insn[3], insn[2]});
+    apb_wr(1, 12'hD04, 0);
+    p_sequencer.dbg_lock.put();
   endtask
 
   task start_channel(int unsigned ch, bit [31:0] pc, bit ns = 0);

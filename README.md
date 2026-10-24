@@ -1,9 +1,11 @@
 # AXI DMA Controller — DMA-330 (PL330) style
 
 Programmable multi-channel AXI4 DMA controller with a DMA-330 compatible
-instruction set and register map, optional clock-domain crossing on every
-interface, and a UVM-1.2 verification environment with in-house VIPs, SVA and a
-C reference model (DPI-C).
+instruction set and register map, a core that runs on the AXI clock (as
+DMA-330), a shared dynamically allocated MFIFO, TrustZone-style security with a
+secure and a non-secure APB port, optional clock-domain crossing on the APB and
+peripheral interfaces, and a UVM-1.2 verification environment with in-house
+VIPs, SVA and a C reference model (DPI-C).
 
 Industry-grade features beyond the basic DMA-330 behaviour:
 
@@ -31,20 +33,20 @@ Documentation (`docs/`):
 ```
 rtl/
   common/   dma_sync_fifo, dma_rr_arbiter
-  cdc/      dma_sync_2ff, dma_rst_sync, dma_cdc_handshake, dma_async_fifo,
-            dma_apb_async_bridge, dma_axi_async_bridge, dma_periph_sync
+  cdc/      dma_sync_2ff, dma_rst_sync, dma_cdc_handshake,
+            dma_apb_async_bridge, dma_periph_sync
   core/     dma330_pkg            ISA, status/fault codes, CCR, burst maths
-            dma_regs              APB register file + debug interface
+            dma_regs              register file, secure + non-secure APB ports, debug interface
             dma_manager           manager thread (DMAGO, boot, debug)
             dma_channel           channel thread (DMA-330 ISA executor)
             dma_fetch_unit        per-thread instruction line buffer
             dma_icache            shared instruction cache
-            dma_datapath          rd_engine + mfifo[ch] + wr_engine
+            dma_datapath          rd_engine + shared mfifo (line reservation) + wr_engine
             dma_rd_engine / dma_wr_engine / dma_mfifo
             dma_event_irq         events / interrupts
             dma_periph_ctrl       peripheral request interface
-            dma330_core           single-clock core
-  top/      axi_dma330            top level with optional CDC bridges
+            dma330_core           single-clock core (aclk)
+  top/      axi_dma330            top level, optional APB / peripheral CDC
 sva/        AXI4 / APB / peripheral protocol checkers, white-box checkers + binds
 model/      C reference model (instruction-set simulator of a channel thread),
             DPI-C layer, stand-alone known-answer test
@@ -56,7 +58,7 @@ tb/
   vip/periph  DMA-330 peripheral VIP (dr/da handshake, flush handling)
   env/        register model, DMA-330 assembler, program generator,
               random-program generator, C-model wrapper, scoreboard, coverage, env
-  seq/        virtual sequences (traffic, events, boot, faults, kill)
+  seq/        virtual sequences (traffic, events, boot, faults, kill, shared MFIFO, security)
   tests/      test library
   tb_top.sv
 sim/        Makefile, run_regression.py, file lists

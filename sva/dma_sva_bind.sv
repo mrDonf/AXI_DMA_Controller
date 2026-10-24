@@ -8,9 +8,9 @@ module dma_sva_bind;
 
   bind dma_sync_fifo     sva_sync_fifo u_sva_sync_fifo (.*);
 
-  bind dma_mfifo         sva_mfifo #(.DATA_W(DATA_W), .LINES(LINES)) u_sva_mfifo (.*);
+  bind dma_mfifo         sva_mfifo #(.NUM_CH(NUM_CH), .DATA_W(DATA_W), .LINES(LINES)) u_sva_mfifo (.*);
 
-  bind dma_async_fifo    sva_async_fifo #(.ADDR_W(ADDR_W)) u_sva_async_fifo (.*);
+  bind dma_datapath      sva_datapath #(.NUM_CH(NUM_CH), .MFIFO_LINES(MFIFO_LINES)) u_sva_dp (.*);
 
   bind dma_cdc_handshake sva_cdc_handshake #(.WIDTH(WIDTH)) u_sva_cdc (.*);
 

@@ -15,6 +15,11 @@
 //                                        +--> KILLING    (DMAKILL) -> STOPPED
 //   any error ------------> FAULT_COMPLETING --> FAULTING --dbg DMAKILL--> KILLING
 //
+// Security: a non-secure thread (DMAGO ns = 1) may only use the events and
+// peripherals that are non-secure in CR3 / CR4 (boot_irq_ns / boot_periph_ns).
+// DMASEV / DMAWFE of a secure event faults with ch_evnt_err; DMAWFP,
+// DMAFLUSHP, DMALDP, DMASTP of a secure peripheral with ch_periph_err.
+//
 // Protocol protection: a DMALD/DMAST whose INCR burst would cross a 4 KB
 // boundary, or a DMAST with an illegal endian-swap setting, faults the channel
 // (ch_rdwr_err) instead of putting an illegal transaction on the AXI bus.
@@ -43,7 +48,12 @@ module dma_channel
   input  logic                    go_ns,
   input  logic                    dbg_kill,
   input  logic                    dbg_fault,
+  input  logic                    dbg_evnt_fault, // debug DMASEV of a secure event
   input  logic                    wd_fault,       // watchdog lock-up
+
+  // Security of each event / peripheral (1: non-secure), CR3 / CR4
+  input  logic [NUM_EVENTS-1:0]   irq_ns,
+  input  logic [NUM_PERIPH-1:0]   periph_ns,
 
   // Instruction cache
   input  logic                    ic_inv_all,
@@ -73,6 +83,7 @@ module dma_channel
   input  logic                    flush_ready,
 
   // Data path
+  output logic                    ld_req,         // DMALD in EXEC, no other fault
   output logic                    ld_valid,
   output xfer_t                   ld_xfer,
   input  logic                    ld_ready,
@@ -216,40 +227,56 @@ module dma_channel
   // Execute-time fault detection (all combinational on the current insn)
   //----------------------------------------------------------------------------
   logic        is_load, is_store, do_xfer;
-  logic [31:0] exec_fault;
+  logic        ev_bad, pe_bad;
+  logic [31:0] irq_ns32, periph_ns32;
+  logic [31:0] exec_fault_base, exec_fault;
 
   assign is_load  = (cls == I_LD)  || (cls == I_LDP);
   assign is_store = (cls == I_ST)  || (cls == I_STP) || (cls == I_STZ);
   // DMASTZ is unconditional (op[0] = 0)
   assign do_xfer  = (is_load || is_store) && cond_ok;
 
+  // Event / peripheral number missing, or secure for a non-secure thread
+  assign irq_ns32    = 32'(irq_ns);
+  assign periph_ns32 = 32'(periph_ns);
+  assign ev_bad      = (int'(num5) >= NUM_EVENTS) || (ns && !irq_ns32[num5]);
+  assign pe_bad      = (int'(num5) >= NUM_PERIPH) || (ns && !periph_ns32[num5]);
+
+  // Every execute-time fault except the MFIFO lock-up, which the data path
+  // decides from ld_req (so it never depends on itself)
   always_comb begin
-    exec_fault = '0;
+    exec_fault_base = '0;
     case (cls)
       I_UNDEF, I_GO:
-        exec_fault[FTC_UNDEF_INSTR] = 1'b1;
+        exec_fault_base[FTC_UNDEF_INSTR] = 1'b1;
       I_MOV:
-        exec_fault[FTC_OPERAND_INVALID] = (b1 > 8'd2);
+        exec_fault_base[FTC_OPERAND_INVALID] = (b1 > 8'd2);
       I_SEV, I_WFE:
-        exec_fault[FTC_CH_EVNT_ERR] = (int'(num5) >= NUM_EVENTS);
+        exec_fault_base[FTC_CH_EVNT_ERR] = ev_bad;
       I_WFP, I_FLUSHP:
-        exec_fault[FTC_CH_PERIPH_ERR] = (int'(num5) >= NUM_PERIPH);
+        exec_fault_base[FTC_CH_PERIPH_ERR] = pe_bad;
       default: ;
     endcase
 
     if (do_xfer) begin
-      if ((cls == I_LDP || cls == I_STP) && int'(num5) >= NUM_PERIPH)
-        exec_fault[FTC_CH_PERIPH_ERR] = 1'b1;
+      if (cls == I_LDP || cls == I_STP)
+        exec_fault_base[FTC_CH_PERIPH_ERR] = pe_bad;
       if (is_load) begin
-        exec_fault[FTC_CH_RDWR_ERR] = (ccr.src_burst_size > MAX_SIZE) ||
-                                      crosses_4k(sar, ccr.src_burst_size, ccr.src_burst_len, ccr.src_inc);
-        exec_fault[FTC_MFIFO_ERR]   = ld_lockup;
+        exec_fault_base[FTC_CH_RDWR_ERR] = (ccr.src_burst_size > MAX_SIZE) ||
+                                           crosses_4k(sar, ccr.src_burst_size, ccr.src_burst_len, ccr.src_inc);
       end else begin
-        exec_fault[FTC_CH_RDWR_ERR]     = (ccr.dst_burst_size > MAX_SIZE) || swap_bad ||
-                                          crosses_4k(dar, ccr.dst_burst_size, ccr.dst_burst_len, ccr.dst_inc);
-        exec_fault[FTC_ST_DATA_UNAVAIL] = st_short;
+        exec_fault_base[FTC_CH_RDWR_ERR]     = (ccr.dst_burst_size > MAX_SIZE) || swap_bad ||
+                                               crosses_4k(dar, ccr.dst_burst_size, ccr.dst_burst_len, ccr.dst_inc);
+        exec_fault_base[FTC_ST_DATA_UNAVAIL] = st_short;
       end
     end
+  end
+
+  assign ld_req = (state == C_EXEC) && do_xfer && is_load && (exec_fault_base == '0);
+
+  always_comb begin
+    exec_fault                = exec_fault_base;
+    exec_fault[FTC_MFIFO_ERR] = ld_req && ld_lockup;
   end
 
   //============================================================================
@@ -495,10 +522,11 @@ module dma_channel
           state <= C_FAULT_COMPLETING;
       end
 
-      if (dbg_fault && state != C_FAULT_COMPLETING && state != C_FAULTING) begin
-        ftr[FTC_UNDEF_INSTR] <= 1'b1;
-        ftr[FTC_DBG_INSTR]   <= 1'b1;
-        state                <= C_FAULT_COMPLETING;
+      if ((dbg_fault || dbg_evnt_fault) && state != C_FAULT_COMPLETING && state != C_FAULTING) begin
+        if (dbg_fault)      ftr[FTC_UNDEF_INSTR] <= 1'b1;
+        if (dbg_evnt_fault) ftr[FTC_CH_EVNT_ERR] <= 1'b1;
+        ftr[FTC_DBG_INSTR] <= 1'b1;
+        state              <= C_FAULT_COMPLETING;
       end
 
       if (wd_fault && wd_can_fault) begin

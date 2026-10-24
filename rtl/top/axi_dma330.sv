@@ -4,25 +4,34 @@
 // Top level of the AXI DMA controller (DMA-330 / PL330 style).
 //
 // Clock domains
-//   clk         DMA core (threads, data path, MFIFO, registers)
-//   pclk        APB configuration port            (APB_ASYNC = 1)
-//   aclk        AXI4 master port / interconnect    (AXI_ASYNC = 1)
+//   aclk        DMA core (threads, data path, MFIFO, registers) and the AXI4
+//               master port: the core runs on the AXI clock, as in DMA-330,
+//               so the AXI port needs no clock-domain crossing
+//   pclk        both APB configuration ports       (APB_ASYNC = 1)
 //   periph_clk  one clock per peripheral interface (PERIPH_ASYNC = 1)
 //
 // When a *_ASYNC parameter is 0 the corresponding interface is synchronous to
-// 'clk' and its clock/reset inputs are unused (tie them to clk / rst_n).
+// 'aclk' and its clock/reset inputs are unused (tie them to aclk / aresetn).
 //
-//             pclk              clk                          aclk
-//   APB ->[apb_async_bridge]->[ dma330_core ]->[axi_async_bridge]-> AXI4
-//                                   ^  |
+//             pclk                  aclk
+//   APB S  ->[apb_async_bridge]->+-------------+
+//   APB NS ->[apb_async_bridge]->| dma330_core |-> AXI4
+//                                +-------------+
+//                                     ^  |
 //   periph_clk[p]: dr/da <->[periph_sync]
+//
+// Security: the secure APB port controls everything; the non-secure port sees
+// and controls only the non-secure manager, channels and events (DSR.DNS,
+// CSRn.CNS, CR3). boot_irq_ns / boot_periph_ns (sampled once after reset)
+// make an event / a peripheral usable by non-secure threads.
 //
 // Every asynchronous reset input is synchronized to its own domain
 // (asynchronous assert, synchronous de-assert).
 //
-// Low power: AMBA Q-Channel on 'clk' (qreqn is synchronized inside).
+// Low power: AMBA Q-Channel on 'aclk' (qreqn is synchronized inside).
 // qactive = core busy OR an APB transfer is requested; it is an asynchronous
-// output intended for the clock controller.
+// output intended for the clock controller. Gating 'aclk' of the DMA (not of
+// the interconnect) is legal while the Q-Channel is in Q_STOPPED.
 //==============================================================================
 module axi_dma330 #(
   parameter int          NUM_CH       = 4,
@@ -34,27 +43,22 @@ module axi_dma330 #(
   parameter int          WQ_DEPTH     = 4,
   parameter int          RD_OUT       = 4,
   parameter int          WR_OUT       = 4,
-  parameter int          MFIFO_LINES  = 32,
+  parameter int          MFIFO_LINES  = 128,       // shared by all channels
   parameter int          IC_LINES     = 8,
   parameter int          IC_BEATS     = 4,
   parameter logic [31:0] PERIPH_ID    = 32'h0000_0330,
   // Clock-domain crossing configuration
   parameter bit          APB_ASYNC    = 1'b0,
-  parameter bit          AXI_ASYNC    = 1'b0,
   parameter bit          PERIPH_ASYNC = 1'b0,
-  parameter int          AFIFO_AW     = 3,         // AXI bridge FIFO depth = 2**AFIFO_AW
   // PSLVERR on unmapped addresses / writes to read-only registers
   parameter bit          APB_SLVERR   = 1'b0
 ) (
-  // DMA core clock / reset
-  input  logic                        clk,
-  input  logic                        rst_n,
+  // DMA core + AXI clock / reset
+  input  logic                        aclk,
+  input  logic                        aresetn,
   // APB clock / reset
   input  logic                        pclk,
   input  logic                        presetn,
-  // AXI clock / reset
-  input  logic                        aclk,
-  input  logic                        aresetn,
   // Peripheral clocks / resets
   input  logic [NUM_PERIPH-1:0]       periph_clk,
   input  logic [NUM_PERIPH-1:0]       periph_rst_n,
@@ -63,8 +67,10 @@ module axi_dma330 #(
   input  logic                        boot_from_pc,
   input  logic [31:0]                 boot_addr,
   input  logic                        boot_manager_ns,
+  input  logic [NUM_EVENTS-1:0]       boot_irq_ns,      // 1: event / irq usable by NS threads
+  input  logic [NUM_PERIPH-1:0]       boot_periph_ns,   // 1: peripheral usable by NS threads
 
-  // APB4 slave (pclk domain)
+  // APB4 slave, secure (pclk domain)
   input  logic                        psel,
   input  logic                        penable,
   input  logic                        pwrite,
@@ -73,6 +79,16 @@ module axi_dma330 #(
   output logic                        pready,
   output logic [31:0]                 prdata,
   output logic                        pslverr,
+
+  // APB4 slave, non-secure (pclk domain)
+  input  logic                        psel_ns,
+  input  logic                        penable_ns,
+  input  logic                        pwrite_ns,
+  input  logic [11:0]                 paddr_ns,
+  input  logic [31:0]                 pwdata_ns,
+  output logic                        pready_ns,
+  output logic [31:0]                 prdata_ns,
+  output logic                        pslverr_ns,
 
   // AXI4 master (aclk domain)
   output logic                        m_axi_awvalid,
@@ -120,11 +136,11 @@ module axi_dma330 #(
   input  logic [NUM_PERIPH-1:0]       daready,
   output logic [NUM_PERIPH-1:0][1:0]  datype,
 
-  // Interrupts (clk domain, level sensitive)
+  // Interrupts (aclk domain, level sensitive)
   output logic [NUM_EVENTS-1:0]       irq,
   output logic                        irq_abort,
 
-  // Low-power Q-Channel (clk domain; qreqn asynchronous, tie high if unused)
+  // Low-power Q-Channel (aclk domain; qreqn asynchronous, tie high if unused)
   input  logic                        qreqn,
   output logic                        qacceptn,
   output logic                        qdeny,
@@ -138,17 +154,29 @@ module axi_dma330 #(
   logic core_busy;
 
   dma_rst_sync u_core_rst_sync (
-    .clk    (clk),
-    .arst_n (rst_n),
+    .clk    (aclk),
+    .arst_n (aresetn),
     .rst_n  (core_rst_n)
   );
 
   //============================================================================
-  // APB port
+  // APB ports: [0] secure, [1] non-secure
   //============================================================================
-  logic        c_psel, c_penable, c_pwrite, c_pready, c_pslverr;
-  logic [11:0] c_paddr;
-  logic [31:0] c_pwdata, c_prdata;
+  logic [1:0]        s_psel, s_penable, s_pwrite, s_pready, s_pslverr;
+  logic [1:0][11:0]  s_paddr;
+  logic [1:0][31:0]  s_pwdata, s_prdata;
+  logic [1:0]        c_psel, c_penable, c_pwrite, c_pready, c_pslverr;
+  logic [1:0][11:0]  c_paddr;
+  logic [1:0][31:0]  c_pwdata, c_prdata;
+
+  assign s_psel    = {psel_ns,    psel};
+  assign s_penable = {penable_ns, penable};
+  assign s_pwrite  = {pwrite_ns,  pwrite};
+  assign s_paddr   = {paddr_ns,   paddr};
+  assign s_pwdata  = {pwdata_ns,  pwdata};
+  assign {pready_ns,  pready}  = s_pready;
+  assign {prdata_ns,  prdata}  = s_prdata;
+  assign {pslverr_ns, pslverr} = s_pslverr;
 
   if (APB_ASYNC) begin : g_apb_async
     logic apb_rst_n;
@@ -159,37 +187,39 @@ module axi_dma330 #(
       .rst_n  (apb_rst_n)
     );
 
-    dma_apb_async_bridge #(.ADDR_W(12), .DATA_W(32)) u_apb_bridge (
-      .pclk      (pclk),
-      .presetn   (apb_rst_n),
-      .s_psel    (psel),
-      .s_penable (penable),
-      .s_pwrite  (pwrite),
-      .s_paddr   (paddr),
-      .s_pwdata  (pwdata),
-      .s_pready  (pready),
-      .s_prdata  (prdata),
-      .s_pslverr (pslverr),
-      .clk       (clk),
-      .rst_n     (core_rst_n),
-      .m_psel    (c_psel),
-      .m_penable (c_penable),
-      .m_pwrite  (c_pwrite),
-      .m_paddr   (c_paddr),
-      .m_pwdata  (c_pwdata),
-      .m_pready  (c_pready),
-      .m_prdata  (c_prdata),
-      .m_pslverr (c_pslverr)
-    );
+    for (genvar i = 0; i < 2; i++) begin : g_port
+      dma_apb_async_bridge #(.ADDR_W(12), .DATA_W(32)) u_apb_bridge (
+        .pclk      (pclk),
+        .presetn   (apb_rst_n),
+        .s_psel    (s_psel[i]),
+        .s_penable (s_penable[i]),
+        .s_pwrite  (s_pwrite[i]),
+        .s_paddr   (s_paddr[i]),
+        .s_pwdata  (s_pwdata[i]),
+        .s_pready  (s_pready[i]),
+        .s_prdata  (s_prdata[i]),
+        .s_pslverr (s_pslverr[i]),
+        .clk       (aclk),
+        .rst_n     (core_rst_n),
+        .m_psel    (c_psel[i]),
+        .m_penable (c_penable[i]),
+        .m_pwrite  (c_pwrite[i]),
+        .m_paddr   (c_paddr[i]),
+        .m_pwdata  (c_pwdata[i]),
+        .m_pready  (c_pready[i]),
+        .m_prdata  (c_prdata[i]),
+        .m_pslverr (c_pslverr[i])
+      );
+    end
   end else begin : g_apb_sync
-    assign c_psel    = psel;
-    assign c_penable = penable;
-    assign c_pwrite  = pwrite;
-    assign c_paddr   = paddr;
-    assign c_pwdata  = pwdata;
-    assign pready    = c_pready;
-    assign prdata    = c_prdata;
-    assign pslverr   = c_pslverr;
+    assign c_psel    = s_psel;
+    assign c_penable = s_penable;
+    assign c_pwrite  = s_pwrite;
+    assign c_paddr   = s_paddr;
+    assign c_pwdata  = s_pwdata;
+    assign s_pready  = c_pready;
+    assign s_prdata  = c_prdata;
+    assign s_pslverr = c_pslverr;
   end
 
   //============================================================================
@@ -219,7 +249,7 @@ module axi_dma330 #(
         .davalid      (davalid[p]),
         .daready      (daready[p]),
         .datype       (datype[p]),
-        .clk          (clk),
+        .clk          (aclk),
         .rst_n        (core_rst_n),
         .dr_valid     (c_dr_valid[p]),
         .dr_ready     (c_dr_ready[p]),
@@ -241,111 +271,7 @@ module axi_dma330 #(
   end
 
   //============================================================================
-  // AXI port (core side signals)
-  //============================================================================
-  logic                c_awvalid, c_awready, c_awlock;
-  logic [ID_W-1:0]     c_awid;
-  logic [31:0]         c_awaddr;
-  logic [7:0]          c_awlen;
-  logic [2:0]          c_awsize, c_awprot;
-  logic [1:0]          c_awburst;
-  logic [3:0]          c_awcache;
-  logic                c_wvalid, c_wready, c_wlast;
-  logic [DATA_W-1:0]   c_wdata;
-  logic [DATA_W/8-1:0] c_wstrb;
-  logic                c_bvalid, c_bready;
-  logic [ID_W-1:0]     c_bid;
-  logic [1:0]          c_bresp;
-  logic                c_arvalid, c_arready, c_arlock;
-  logic [ID_W-1:0]     c_arid;
-  logic [31:0]         c_araddr;
-  logic [7:0]          c_arlen;
-  logic [2:0]          c_arsize, c_arprot;
-  logic [1:0]          c_arburst;
-  logic [3:0]          c_arcache;
-  logic                c_rvalid, c_rready, c_rlast;
-  logic [ID_W-1:0]     c_rid;
-  logic [DATA_W-1:0]   c_rdata;
-  logic [1:0]          c_rresp;
-
-  if (AXI_ASYNC) begin : g_axi_async
-    logic axi_rst_n;
-
-    dma_rst_sync u_axi_rst_sync (
-      .clk    (aclk),
-      .arst_n (aresetn),
-      .rst_n  (axi_rst_n)
-    );
-
-    dma_axi_async_bridge #(
-      .ID_W    (ID_W),
-      .ADDR_W  (32),
-      .DATA_W  (DATA_W),
-      .FIFO_AW (AFIFO_AW)
-    ) u_axi_bridge (
-      .s_clk     (clk),            .s_rst_n   (core_rst_n),
-      .s_awvalid (c_awvalid),      .s_awready (c_awready),
-      .s_awid    (c_awid),         .s_awaddr  (c_awaddr),
-      .s_awlen   (c_awlen),        .s_awsize  (c_awsize),
-      .s_awburst (c_awburst),      .s_awlock  (c_awlock),
-      .s_awcache (c_awcache),      .s_awprot  (c_awprot),
-      .s_wvalid  (c_wvalid),       .s_wready  (c_wready),
-      .s_wdata   (c_wdata),        .s_wstrb   (c_wstrb),
-      .s_wlast   (c_wlast),
-      .s_bvalid  (c_bvalid),       .s_bready  (c_bready),
-      .s_bid     (c_bid),          .s_bresp   (c_bresp),
-      .s_arvalid (c_arvalid),      .s_arready (c_arready),
-      .s_arid    (c_arid),         .s_araddr  (c_araddr),
-      .s_arlen   (c_arlen),        .s_arsize  (c_arsize),
-      .s_arburst (c_arburst),      .s_arlock  (c_arlock),
-      .s_arcache (c_arcache),      .s_arprot  (c_arprot),
-      .s_rvalid  (c_rvalid),       .s_rready  (c_rready),
-      .s_rid     (c_rid),          .s_rdata   (c_rdata),
-      .s_rresp   (c_rresp),        .s_rlast   (c_rlast),
-
-      .m_clk     (aclk),           .m_rst_n   (axi_rst_n),
-      .m_awvalid (m_axi_awvalid),  .m_awready (m_axi_awready),
-      .m_awid    (m_axi_awid),     .m_awaddr  (m_axi_awaddr),
-      .m_awlen   (m_axi_awlen),    .m_awsize  (m_axi_awsize),
-      .m_awburst (m_axi_awburst),  .m_awlock  (m_axi_awlock),
-      .m_awcache (m_axi_awcache),  .m_awprot  (m_axi_awprot),
-      .m_wvalid  (m_axi_wvalid),   .m_wready  (m_axi_wready),
-      .m_wdata   (m_axi_wdata),    .m_wstrb   (m_axi_wstrb),
-      .m_wlast   (m_axi_wlast),
-      .m_bvalid  (m_axi_bvalid),   .m_bready  (m_axi_bready),
-      .m_bid     (m_axi_bid),      .m_bresp   (m_axi_bresp),
-      .m_arvalid (m_axi_arvalid),  .m_arready (m_axi_arready),
-      .m_arid    (m_axi_arid),     .m_araddr  (m_axi_araddr),
-      .m_arlen   (m_axi_arlen),    .m_arsize  (m_axi_arsize),
-      .m_arburst (m_axi_arburst),  .m_arlock  (m_axi_arlock),
-      .m_arcache (m_axi_arcache),  .m_arprot  (m_axi_arprot),
-      .m_rvalid  (m_axi_rvalid),   .m_rready  (m_axi_rready),
-      .m_rid     (m_axi_rid),      .m_rdata   (m_axi_rdata),
-      .m_rresp   (m_axi_rresp),    .m_rlast   (m_axi_rlast)
-    );
-  end else begin : g_axi_sync
-    assign m_axi_awvalid = c_awvalid;   assign c_awready = m_axi_awready;
-    assign m_axi_awid    = c_awid;      assign m_axi_awaddr  = c_awaddr;
-    assign m_axi_awlen   = c_awlen;     assign m_axi_awsize  = c_awsize;
-    assign m_axi_awburst = c_awburst;   assign m_axi_awlock  = c_awlock;
-    assign m_axi_awcache = c_awcache;   assign m_axi_awprot  = c_awprot;
-    assign m_axi_wvalid  = c_wvalid;    assign c_wready = m_axi_wready;
-    assign m_axi_wdata   = c_wdata;     assign m_axi_wstrb   = c_wstrb;
-    assign m_axi_wlast   = c_wlast;
-    assign c_bvalid      = m_axi_bvalid; assign m_axi_bready = c_bready;
-    assign c_bid         = m_axi_bid;    assign c_bresp      = m_axi_bresp;
-    assign m_axi_arvalid = c_arvalid;   assign c_arready = m_axi_arready;
-    assign m_axi_arid    = c_arid;      assign m_axi_araddr  = c_araddr;
-    assign m_axi_arlen   = c_arlen;     assign m_axi_arsize  = c_arsize;
-    assign m_axi_arburst = c_arburst;   assign m_axi_arlock  = c_arlock;
-    assign m_axi_arcache = c_arcache;   assign m_axi_arprot  = c_arprot;
-    assign c_rvalid      = m_axi_rvalid; assign m_axi_rready = c_rready;
-    assign c_rid         = m_axi_rid;    assign c_rdata      = m_axi_rdata;
-    assign c_rresp       = m_axi_rresp;  assign c_rlast      = m_axi_rlast;
-  end
-
-  //============================================================================
-  // DMA core
+  // DMA core (aclk domain, drives the AXI master port directly)
   //============================================================================
   dma330_core #(
     .NUM_CH      (NUM_CH),
@@ -363,54 +289,64 @@ module axi_dma330 #(
     .PERIPH_ID   (PERIPH_ID),
     .APB_SLVERR  (APB_SLVERR)
   ) u_core (
-    .clk             (clk),
+    .clk             (aclk),
     .rst_n           (core_rst_n),
     .boot_from_pc    (boot_from_pc),
     .boot_addr       (boot_addr),
     .boot_manager_ns (boot_manager_ns),
-    .psel            (c_psel),
-    .penable         (c_penable),
-    .pwrite          (c_pwrite),
-    .paddr           (c_paddr),
-    .pwdata          (c_pwdata),
-    .pready          (c_pready),
-    .prdata          (c_prdata),
-    .pslverr         (c_pslverr),
-    .m_awvalid       (c_awvalid),
-    .m_awready       (c_awready),
-    .m_awid          (c_awid),
-    .m_awaddr        (c_awaddr),
-    .m_awlen         (c_awlen),
-    .m_awsize        (c_awsize),
-    .m_awburst       (c_awburst),
-    .m_awlock        (c_awlock),
-    .m_awcache       (c_awcache),
-    .m_awprot        (c_awprot),
-    .m_wvalid        (c_wvalid),
-    .m_wready        (c_wready),
-    .m_wdata         (c_wdata),
-    .m_wstrb         (c_wstrb),
-    .m_wlast         (c_wlast),
-    .m_bvalid        (c_bvalid),
-    .m_bready        (c_bready),
-    .m_bid           (c_bid),
-    .m_bresp         (c_bresp),
-    .m_arvalid       (c_arvalid),
-    .m_arready       (c_arready),
-    .m_arid          (c_arid),
-    .m_araddr        (c_araddr),
-    .m_arlen         (c_arlen),
-    .m_arsize        (c_arsize),
-    .m_arburst       (c_arburst),
-    .m_arlock        (c_arlock),
-    .m_arcache       (c_arcache),
-    .m_arprot        (c_arprot),
-    .m_rvalid        (c_rvalid),
-    .m_rready        (c_rready),
-    .m_rid           (c_rid),
-    .m_rdata         (c_rdata),
-    .m_rresp         (c_rresp),
-    .m_rlast         (c_rlast),
+    .boot_irq_ns     (boot_irq_ns),
+    .boot_periph_ns  (boot_periph_ns),
+    .psel            (c_psel[0]),
+    .penable         (c_penable[0]),
+    .pwrite          (c_pwrite[0]),
+    .paddr           (c_paddr[0]),
+    .pwdata          (c_pwdata[0]),
+    .pready          (c_pready[0]),
+    .prdata          (c_prdata[0]),
+    .pslverr         (c_pslverr[0]),
+    .psel_ns         (c_psel[1]),
+    .penable_ns      (c_penable[1]),
+    .pwrite_ns       (c_pwrite[1]),
+    .paddr_ns        (c_paddr[1]),
+    .pwdata_ns       (c_pwdata[1]),
+    .pready_ns       (c_pready[1]),
+    .prdata_ns       (c_prdata[1]),
+    .pslverr_ns      (c_pslverr[1]),
+    .m_awvalid       (m_axi_awvalid),
+    .m_awready       (m_axi_awready),
+    .m_awid          (m_axi_awid),
+    .m_awaddr        (m_axi_awaddr),
+    .m_awlen         (m_axi_awlen),
+    .m_awsize        (m_axi_awsize),
+    .m_awburst       (m_axi_awburst),
+    .m_awlock        (m_axi_awlock),
+    .m_awcache       (m_axi_awcache),
+    .m_awprot        (m_axi_awprot),
+    .m_wvalid        (m_axi_wvalid),
+    .m_wready        (m_axi_wready),
+    .m_wdata         (m_axi_wdata),
+    .m_wstrb         (m_axi_wstrb),
+    .m_wlast         (m_axi_wlast),
+    .m_bvalid        (m_axi_bvalid),
+    .m_bready        (m_axi_bready),
+    .m_bid           (m_axi_bid),
+    .m_bresp         (m_axi_bresp),
+    .m_arvalid       (m_axi_arvalid),
+    .m_arready       (m_axi_arready),
+    .m_arid          (m_axi_arid),
+    .m_araddr        (m_axi_araddr),
+    .m_arlen         (m_axi_arlen),
+    .m_arsize        (m_axi_arsize),
+    .m_arburst       (m_axi_arburst),
+    .m_arlock        (m_axi_arlock),
+    .m_arcache       (m_axi_arcache),
+    .m_arprot        (m_axi_arprot),
+    .m_rvalid        (m_axi_rvalid),
+    .m_rready        (m_axi_rready),
+    .m_rid           (m_axi_rid),
+    .m_rdata         (m_axi_rdata),
+    .m_rresp         (m_axi_rresp),
+    .m_rlast         (m_axi_rlast),
     .dr_valid        (c_dr_valid),
     .dr_ready        (c_dr_ready),
     .dr_type         (c_dr_type),
@@ -426,7 +362,7 @@ module axi_dma330 #(
     .busy            (core_busy)
   );
 
-  // Work pending in the core, or a register access waiting at the APB port
-  assign qactive = core_busy || psel;
+  // Work pending in the core, or a register access waiting at an APB port
+  assign qactive = core_busy || psel || psel_ns;
 
 endmodule : axi_dma330

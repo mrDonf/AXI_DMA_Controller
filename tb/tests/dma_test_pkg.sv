@@ -23,6 +23,8 @@
 //   dma_lowpower_test       Q-Channel quiescence, clock gating, wake-up
 //   dma_rand_prog_test      random instruction streams, C reference model (DPI-C) predicts
 //   dma_cmodel_mix_test     every job kind + random streams, choked AXI, C model cross-check
+//   dma_mfifo_share_test    shared MFIFO: one channel uses most of it, wait for space, deadlock
+//   dma_security_test       secure / non-secure APB ports, CR3 / CR4, NS threads and manager
 //
 // Plusargs:  +AXI_PROFILE=fast|slow|default   +NO_REORDER   +NO_CMODEL
 //==============================================================================
@@ -59,10 +61,13 @@ package dma_test_pkg;
       cfg         = dma_env_cfg::type_id::create("cfg");
       cfg.mem     = axi_mem_model::type_id::create("mem");
       cfg.apb_cfg = apb_config::type_id::create("apb_cfg");
+      cfg.apb_ns_cfg = apb_config::type_id::create("apb_ns_cfg");
       cfg.axi_cfg = axi_config::type_id::create("axi_cfg");
 
       if (!uvm_config_db #(apb_vif_t)::get(this, "", "apb_vif", cfg.apb_cfg.vif))
         `uvm_fatal("NOVIF", "apb_vif not found")
+      if (!uvm_config_db #(apb_vif_t)::get(this, "", "apb_ns_vif", cfg.apb_ns_cfg.vif))
+        `uvm_fatal("NOVIF", "apb_ns_vif not found")
       if (!uvm_config_db #(axi_vif_t)::get(this, "", "axi_vif", cfg.axi_cfg.vif))
         `uvm_fatal("NOVIF", "axi_vif not found")
       if (!uvm_config_db #(virtual dma_ctrl_if #(NUM_EVENTS))::get(this, "", "ctrl_vif", cfg.ctrl_vif))
@@ -70,6 +75,7 @@ package dma_test_pkg;
       void'(uvm_config_db #(int)::get(this, "", "async_mode", cfg.async_mode));
       cfg.apb_slverr         = (cfg.async_mode != 0);   // tb_top: APB_SLVERR = ASYNC
       cfg.apb_cfg.cov_slverr = cfg.apb_slverr;
+      cfg.apb_ns_cfg.cov_slverr = cfg.apb_slverr;
 
       foreach (cfg.per_cfg[p]) begin
         cfg.per_cfg[p] = periph_config::type_id::create($sformatf("per_cfg%0d", p));
@@ -374,6 +380,29 @@ package dma_test_pkg;
     function new(string name, uvm_component parent); super.new(name, parent); endfunction
     virtual function dma_base_vseq create_vseq();
       return dma_kill_vseq::type_id::create("vseq");
+    endfunction
+  endclass
+
+  class dma_mfifo_share_test extends dma_base_test;
+    `uvm_component_utils(dma_mfifo_share_test)
+    function new(string name, uvm_component parent); super.new(name, parent); endfunction
+    virtual function dma_base_vseq create_vseq();
+      return dma_mfifo_vseq::type_id::create("vseq");
+    endfunction
+  endclass
+
+  // Event / peripheral security is configured before reset is released
+  class dma_security_test extends dma_base_test;
+    `uvm_component_utils(dma_security_test)
+    function new(string name, uvm_component parent); super.new(name, parent); endfunction
+    virtual function void end_of_elaboration_phase(uvm_phase phase);
+      super.end_of_elaboration_phase(phase);
+      cfg.ctrl_vif.boot_irq_ns     = dma_security_vseq::IRQ_NS;
+      cfg.ctrl_vif.boot_periph_ns  = dma_security_vseq::PERIPH_NS;
+      cfg.ctrl_vif.boot_manager_ns = 1'b0;
+    endfunction
+    virtual function dma_base_vseq create_vseq();
+      return dma_security_vseq::type_id::create("vseq");
     endfunction
   endclass
 

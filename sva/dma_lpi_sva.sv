@@ -21,7 +21,10 @@ module dma_lpi_sva (
   input logic irq_abort,
   input logic psel,
   input logic penable,
-  input logic pready
+  input logic pready,
+  input logic psel_ns,
+  input logic penable_ns,
+  input logic pready_ns
 );
 
   default clocking cb @(posedge clk); endclocking
@@ -37,6 +40,7 @@ module dma_lpi_sva (
   LPI_D_QUIESCENT:     assert property (!qacceptn |-> !awvalid && !wvalid && !arvalid && !davalid);
   // No register access completes while quiescent (it waits for the wake-up)
   LPI_D_APB_HELD:      assert property (!qacceptn |-> !(psel && penable && pready));
+  LPI_D_APB_NS_HELD:   assert property (!qacceptn |-> !(psel_ns && penable_ns && pready_ns));
 
   // Controller: qreqn changes only after the device answered the previous step
   LPI_C_REQ_ONLY_RUN:  assert property ($fell(qreqn) |-> $past(qacceptn) && !$past(qdeny));

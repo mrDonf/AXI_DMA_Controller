@@ -31,6 +31,11 @@ void* dma330_dpi_new(unsigned int bus_bytes, unsigned int num_events, unsigned i
 
 void dma330_dpi_free(void* h) { dma330_free((dma330_t*)h); }
 
+void dma330_dpi_security(void* h, unsigned int irq_ns, unsigned int periph_ns)
+{
+    dma330_security((dma330_t*)h, irq_ns, periph_ns);
+}
+
 void dma330_dpi_go(void* h, unsigned int pc, int ns) { dma330_go((dma330_t*)h, pc, ns); }
 
 void dma330_dpi_periph_req(void* h, int periph, int burst, int last)

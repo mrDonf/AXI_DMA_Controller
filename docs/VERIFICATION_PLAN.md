@@ -77,20 +77,21 @@
 
 ```
  tb_top
-  ├─ clock/reset gen: core 200 MHz; async: APB 79 MHz, AXI 135 MHz, periph 122/92/74/61 MHz
-  ├─ DUT axi_dma330 #(APB_ASYNC=AXI_ASYNC=PERIPH_ASYNC=ASYNC)
-  ├─ protocol SVA: axi4_master_sva, apb_slave_sva, dma_periph_sva[p]
+  ├─ clock/reset gen: aclk 200 MHz (lõi + AXI; nhánh vào DUT có thể bị gate); async: APB 79 MHz, periph 122/92/74/61 MHz
+  ├─ DUT axi_dma330 #(APB_ASYNC=PERIPH_ASYNC=ASYNC)
+  ├─ protocol SVA: axi4_master_sva, apb_slave_sva x2 (cổng S, NS), dma_periph_sva[p]
   ├─ dma_sva_bind (white-box checkers)
   └─ uvm_test
       └─ dma_env
-          ├─ apb_agent (driver, monitor + cg_apb) ── apb_reg_adapter ── dma_reg_block (RAL)
+          ├─ apb_agent (cổng secure: driver, monitor + cg_apb) ── apb_reg_adapter ── dma_reg_block (RAL)
           │                                         uvm_reg_predictor (explicit prediction)
+          ├─ apb_ns agent (cổng non-secure: truy cập thô apb_rd/apb_wr, dbg_exec_ns)
           ├─ axi_agent: axi_slave_driver (reactive memory slave), axi_monitor, axi_coverage
           │      └─ axi_mem_model (bộ nhớ thưa, dùng chung với scoreboard)
           ├─ periph_agent[p]: periph_driver, periph_monitor + cg_periph
           ├─ dma_scoreboard (reference model) ◄── dma_cmodel ◄─DPI-C─ model/dma330_ref (ISS)
           ├─ dma_coverage (cg_job, cg_insn, cg_fault)
-          └─ dma_virtual_sequencer (apb_sqr, per_sqr[], rm, sb, cov, cfg, dbg_lock)
+          └─ dma_virtual_sequencer (apb_sqr, apb_ns_sqr, per_sqr[], rm, sb, cov, cfg, dbg_lock)
 ```
 
 ### 3.1 VIP tự xây dựng
@@ -200,8 +201,8 @@ Khi test cố tình gây lỗi hoặc kill một kênh, scoreboard đặt kênh 
 | Module | Assertion | Nội dung |
 |---|---|---|
 | `dma_sync_fifo` | `FIFO_NO_OVERFLOW`, `FIFO_NO_UNDERFLOW` | Mọi queue/tracker/ack queue |
-| `dma_mfifo` | `MFIFO_NO_OVERFLOW`, `MFIFO_NO_UNDERFLOW`, `MFIFO_PUSH_NONZERO` | Admission control đúng |
-| `dma_async_fifo` | `AFIFO_WGRAY_ONEHOT`, `AFIFO_RGRAY_ONEHOT`, cover `AFIFO_C_FULL` | Con trỏ gray chỉ đổi 1 bit mỗi lần |
+| `dma_mfifo` | `MFIFO_ALLOC_HAS_LINE`, `MFIFO_NO_UNDERFLOW`, `MFIFO_PUSH_NONZERO`, `MFIFO_LINES_OWNED`, `MFIFO_OFF_HAS_LINE`, `MFIFO_BYTES_FIT`; cover `MFIFO_C_FULLISH`, `MFIFO_C_POOL_FULL` | Push cần line mới luôn có line trống; chỉ pop byte đang có; mỗi line đang dùng thuộc đúng một danh sách; byte lưu nằm gọn trong line của kênh |
+| `dma_datapath` | `DP_POOL_NOT_OVERCOMMITTED`, `DP_LINES_RESERVED`, `DP_LOCKUP_ONLY_ON_LOAD`; cover `DP_C_WAIT_FOR_SPACE`, `DP_C_DEADLOCK` | Tổng line đặt chỗ ≤ `MFIFO_LINES`; line thật của kênh ≤ line đã đặt; lock-up chỉ báo cho `DMALD` đang thực thi |
 | `dma_cdc_handshake` | `CDC_DATA_STABLE`, cover `CDC_C_TRANSFER` | Payload ổn định khi qua domain |
 | `dma_rd_engine` | `RD_BEAT_HAS_BURST`, `RD_RLAST_POSITION` | Mỗi beat R thuộc về một burst đang bay; `RLAST` đúng ở beat cuối |
 | `dma_channel` | `CH_ONE_REQ`, `CH_NO_REQ_FLUSHING`, `CH_FAULT_FLUSHES` | Không phát LD và ST cùng lúc; không phát request khi đang flush; kênh lỗi luôn bật flush |
@@ -215,7 +216,7 @@ Khi test cố tình gây lỗi hoặc kill một kênh, scoreboard đặt kênh 
 | `LPI_D_ACCEPT_ON_REQ`, `LPI_D_DENY_ON_REQ` | `qacceptn` hạ / `qdeny` lên chỉ khi `qreqn = 0` |
 | `LPI_D_EXIT_ON_REQ`, `LPI_D_DENY_RELEASE` | `qacceptn` lên / `qdeny` hạ chỉ khi `qreqn = 1` |
 | `LPI_D_QUIESCENT` | Khi `qacceptn = 0`: không có `AWVALID`, `WVALID`, `ARVALID`, `DAVALID` |
-| `LPI_D_APB_HELD` | Khi `qacceptn = 0`: không có APB transfer nào hoàn tất (phải chờ đánh thức) |
+| `LPI_D_APB_HELD`, `LPI_D_APB_NS_HELD` | Khi `qacceptn = 0`: không có APB transfer nào hoàn tất trên cả hai cổng (phải chờ đánh thức) |
 | `LPI_C_REQ_ONLY_RUN`, `LPI_C_EXIT_ANSWERED` | Nghĩa vụ của controller (kiểm tra mô hình TB) |
 | cover `LPI_C_ACCEPTED`, `LPI_C_DENIED`, `LPI_C_WAKEUP` | |
 
@@ -275,7 +276,7 @@ Cột "Test" dùng tên rút gọn (bỏ tiền tố `dma_` và hậu tố `_tes
 | VP-DP-05 | Độ dài truyền 1–8 B, 9–128, 129–1024, > 1024 | traffic | `cg_job.cp_bytes` |
 | VP-DP-06 | Beat hẹp (narrow) | m2m_unaligned | `cg_burst.cp_narrow` |
 | VP-DP-07 | Nhiều kênh truyền song song, phân xử AR/W | multi_ch, stress | branch arbiter |
-| VP-DP-08 | MFIFO đầy, LD bị chặn chờ chỗ | stress | `MFIFO_*` assertion, branch `space_ok` |
+| VP-DP-08 | MFIFO đầy, LD bị chặn chờ chỗ | stress, mfifo_share | `MFIFO_*`/`DP_*` assertion, branch `fits` |
 | VP-DP-09 | Write chỉ bắt đầu khi đủ dữ liệu | mọi test | `WR_*` assertion, scoreboard |
 | VP-AXI-01 | Back-pressure AW/W/AR, latency B/R | mọi test (default), stress (slow) | `AXI_C_AW_BACKPRESSURE` |
 | VP-AXI-02 | Phản hồi out-of-order giữa ID | multi_ch, stress | scoreboard theo ID |
@@ -288,6 +289,11 @@ Cột "Test" dùng tên rút gọn (bỏ tiền tố `dma_` và hậu tố `_tes
 | VP-DP-10 | Endian swap 16/32/64 bit, mọi beat size ≥ nhóm, scoreboard đảo byte | endian | `cg_job.cp_swap` |
 | VP-DP-11 | Endian swap không hợp lệ (nhóm > beat, `DAR` không align) → `ch_rdwr_err` | fault | `cg_fault.rdwr_err` |
 | VP-DP-12 | `DMASTZ` bỏ qua trường swap (kể cả giá trị 5–7, `DAR` không align) | endian | scoreboard |
+| VP-MF-01 | MFIFO dùng chung: một kênh load 7/8 pool (896 B, gấp 3.5 lần phần chia tĩnh cũ) trước khi store, align và không align | mfifo_share (1) | so bộ nhớ, `MFIFO_C_FULLISH` |
+| VP-MF-02 | `DMALD` không vừa vì kênh khác giữ pool thì chờ, không lỗi; chạy tiếp khi kênh kia giải phóng | mfifo_share (2) | `DP_C_WAIT_FOR_SPACE`, `CSR`/`CPC`/`FSRC` |
+| VP-MF-03 | Deadlock hai kênh (cùng giữ line, cùng kẹt ở `DMALD`, không store) → cả hai `mfifo_err`, `CPC` tại `DMALD`; kênh thứ ba đang chờ chỗ nhưng không giữ line thì không bị lỗi và chạy xong; pool trống lại, mọi kênh chạy được | mfifo_share (3) | `DP_C_DEADLOCK`, `cg_fault.mfifo_err` |
+| VP-MF-04 | Self lock-up: một kênh load nhiều hơn toàn bộ pool mà không store → `mfifo_err` | fault | `cg_fault.mfifo_err` |
+| VP-MF-05 | Kênh có stream rỗng trả line dùng dở và bắt đầu lại ở offset 0; line của kênh bị flush/kill về pool | mọi test traffic (không align), kill, fault | `DP_LINES_RESERVED`, `MFIFO_LINES_OWNED` |
 
 ### 5.4 Peripheral
 
@@ -327,6 +333,18 @@ Cột "Test" dùng tên rút gọn (bỏ tiền tố `dma_` và hậu tố `_tes
 | VP-MGR-05 | Lỗi fetch khi boot, phục hồi | boot_err |
 | VP-MGR-06 | Lệnh debug manager không hợp lệ (`DMAWFE`), `DMAGO` tới kênh không tồn tại, event sai | fault |
 | VP-MGR-07 | Manager lỗi bỏ qua mọi lệnh debug trừ `DMAKILL` | fault |
+| VP-SEC-01 | `CR3`/`CR4`/`CR0[2]`/`DSR.DNS` theo chân boot, đọc giống nhau trên hai cổng | security |
+| VP-SEC-02 | Cổng NS: thanh ghi của kênh secure đọc 0, của kênh NS đọc như cổng S (`FTR`, `FAR`, `CSR`, `CPC`, `SAR`, `DAR`, `CCR`, `LC0`, `LC1`) | security |
+| VP-SEC-03 | Cổng NS: `INTEN` chỉ đổi bit NS; `INT_EVENT_RIS`/`INTMIS` chỉ thấy bit NS; `INTCLR` chỉ xóa bit NS; `WD` đọc 0, ghi bị bỏ qua | security |
+| VP-SEC-04 | Mỗi cổng có `DBGINST0/1` riêng | security |
+| VP-SEC-05 | Lệnh debug từ cổng NS tới manager secure (`DMAGO`), kênh secure (`DMAKILL` khi đang chạy, `DMASEV`, `DMAKILL` khi Faulting) bị bỏ qua | security |
+| VP-SEC-06 | Kênh NS: `DMASEV`/`DMAWFE` event secure → `ch_evnt_err`; `DMAWFP`/`DMAFLUSHP`/`DMALDP`/`DMASTP` peripheral secure → `ch_periph_err`; debug `DMASEV` event secure → `ch_evnt_err` + `dbg_instr`; lỗi đọc và `DMAKILL` qua cổng NS | security |
+| VP-SEC-07 | Kênh NS dùng được event/peripheral NS; kênh secure dùng được mọi event/peripheral | security |
+| VP-SEC-08 | Lỗi của kênh/manager secure không thấy được từ cổng NS (`FSRC`, `FTRn`, `FSRD`, `FTRD`, `DPC`) | security |
+| VP-SEC-09 | Manager NS (sau reset với `boot_manager_ns = 1`): cổng NS tự chạy một job hoàn chỉnh (`DMAGO`, `INTEN`, `INTCLR`, `CSR`), scoreboard kiểm `AxPROT[1] = 1` | security |
+| VP-SEC-10 | Manager NS: `DMAGO` kênh secure → `dmago_err` (từ cả hai cổng), `DMASEV` event secure → `mgr_evnt_err`, thấy và xóa được từ cổng NS; `DMASEV` event NS hợp lệ | security |
+| VP-SEC-11 | Hai cổng truy cập cùng chu kỳ: cổng secure trước, cổng NS chờ (`pready_ns = 0`) | security (sync), `APB_S_READY_BOUNDED` |
+| VP-SEC-12 | `PSLVERR` trên cổng NS giống cổng secure (`APB_SLVERR`) | security (async) + `APB_C_SLVERR` của `u_apb_ns_sva` |
 
 ### 5.7 Fault
 
@@ -389,8 +407,8 @@ Cột "Test" dùng tên rút gọn (bỏ tiền tố `dma_` và hậu tố `_tes
 
 | ID | Hạng mục | Phương pháp |
 |---|---|---|
-| VP-CDC-01 | APB async bridge: đọc/ghi đúng ở tỉ lệ clock 79/200 MHz | Mọi test ở cấu hình async + `CDC_DATA_STABLE` |
-| VP-CDC-02 | AXI async bridge: 5 FIFO, mọi traffic ở 135/200 MHz | Mọi test async + `AFIFO_*GRAY_ONEHOT` |
+| VP-CDC-01 | APB async bridge (hai cổng): đọc/ghi đúng ở tỉ lệ clock 79/200 MHz | Mọi test ở cấu hình async + `CDC_DATA_STABLE`; security async cho cổng NS |
+| VP-CDC-02 | Lõi chạy bằng `aclk`: không có CDC trên AXI (đã bỏ AXI async bridge) | Kiểm bằng cấu trúc (`axi_dma330` nối thẳng `dma330_core` ra cổng AXI) |
 | VP-CDC-03 | Peripheral sync ở 4 clock khác nhau | periph/stress async |
 | VP-CDC-04 | Reset synchronizer | Mọi test, reset test |
 
@@ -402,7 +420,8 @@ Cột "Test" dùng tên rút gọn (bỏ tiền tố `dma_` và hậu tố `_tes
 | VP-CM-02 | Trạng thái kiến trúc cuối job (`CPC`, `SAR`, `DAR`, `CCR`, `LC0`, `LC1`) | `check_arch_state` qua RAL | mọi test dùng `run_job` | SB-11 |
 | VP-CM-03 | Chương trình ngẫu nhiên: vòng lặp lồng LC0/LC1, `DMAADDH` (kể cả imm ≥ 0x8000), `DMAADNH`, FIXED/INCR, không align hai phía, endian swap, `AxPROT/AxCACHE`, `DMASTZ` kèm swap bất kỳ | `JOB_RAND` + C model làm bộ dự đoán duy nhất | rand_prog, cmodel_mix | SB-10, `cg_insn` |
 | VP-CM-04 | `SAR`/`DAR` quay vòng qua 2³² | Kernel ở `0xFFFF_F000` / `0xFFFF_E000` (kênh 0) | rand_prog, cmodel_mix | SB-10, SB-11 |
-| VP-CM-05 | Model được kiểm trước khi dùng làm chuẩn | `dma330_ref_test` (known-answer tính tay từ đặc tả) chạy trong mỗi lần build, dừng nếu fail | build | 133 kiểm tra |
+| VP-CM-05 | Model được kiểm trước khi dùng làm chuẩn | `dma330_ref_test` (known-answer tính tay từ đặc tả) chạy trong mỗi lần build, dừng nếu fail | build | 147 kiểm tra (gồm MFIFO theo line, security event/peripheral) |
+| VP-CM-06 | Lock-up MFIFO theo line của pool dùng chung; trường hợp phụ thuộc thời gian (offset line) được model báo `DM_EV_UNSURE` để bộ sinh loại bỏ | `dma330_ref_test` | build | `test_mfifo_lines` |
 
 ---
 
@@ -432,7 +451,7 @@ Cột "Test" dùng tên rút gọn (bỏ tiền tố `dma_` và hậu tố `_tes
 
 ### 6.3 Cover directive
 
-`AXI_C_*`, `APB_C_WAIT_STATE`, `APB_C_SLVERR`, `PER_C_*`, `AFIFO_C_FULL`, `CDC_C_TRANSFER`, `LPI_C_*`.
+`AXI_C_*`, `APB_C_WAIT_STATE`, `APB_C_SLVERR`, `PER_C_*`, `MFIFO_C_*`, `DP_C_*`, `CDC_C_TRANSFER`, `LPI_C_*`.
 
 ---
 
@@ -440,10 +459,10 @@ Cột "Test" dùng tên rút gọn (bỏ tiền tố `dma_` và hậu tố `_tes
 
 | Cấu hình | Tham số DUT | Clock |
 |---|---|---|
-| `sync` | `APB_ASYNC = AXI_ASYNC = PERIPH_ASYNC = 0`, `APB_SLVERR = 0` | Mọi giao diện ở 200 MHz |
-| `async` | cả 3 bằng 1, `APB_SLVERR = 1` | core 200 MHz, APB 79.4 MHz, AXI 135 MHz, peripheral 122 / 92.6 / 74.6 / 60.2 MHz |
+| `sync` | `APB_ASYNC = PERIPH_ASYNC = 0`, `APB_SLVERR = 0` | Mọi giao diện ở 200 MHz |
+| `async` | cả 2 bằng 1, `APB_SLVERR = 1` | `aclk` (lõi + AXI) 200 MHz, APB 79.4 MHz, peripheral 122 / 92.6 / 74.6 / 60.2 MHz |
 
-Tham số chung: `NUM_CH=4`, `NUM_PERIPH=4`, `NUM_EVENTS=16`, `DATA_W=64`, `ID_W=4`, `MFIFO_LINES=32`, `IC_LINES=8`, `IC_BEATS=4`, các queue/tracker sâu 4.
+Tham số chung: `NUM_CH=4`, `NUM_PERIPH=4`, `NUM_EVENTS=16`, `DATA_W=64`, `ID_W=4`, `MFIFO_LINES=128` (dùng chung), `IC_LINES=8`, `IC_BEATS=4`, các queue/tracker sâu 4. Chân boot mặc định: `boot_irq_ns`/`boot_periph_ns` toàn 1 (mọi event/peripheral dùng được cho cả hai thế giới); `dma_security_test` đặt `0x00FF`/`0b0011`.
 
 Plusargs:
 * `+AXI_PROFILE=fast|slow|default`;
@@ -478,7 +497,7 @@ python run_regression.py -t dma_stress_test -c async --seeds 10 -j 16
 
 | # | Tiêu chí | Ngưỡng |
 |---|---|---|
-| 1 | Regression đầy đủ (22 test × 2 cấu hình × ≥ 3 seed) | 100 % PASS |
+| 1 | Regression đầy đủ (24 test × 2 cấu hình × ≥ 3 seed) | 100 % PASS |
 | 2 | Không có assertion fail | 0 |
 | 3 | Statement / FSM state / FSM transition (theo design unit) | 100 % (statement: ngoại lệ đã giải thích ở 9.3) |
 | 4 | Branch (theo design unit) | ≥ 98 %, phần thiếu được giải thích |
@@ -487,20 +506,39 @@ python run_regression.py -t dma_stress_test -c async --seeds 10 -j 16
 | 7 | Mọi hạng mục VP ở mục 5 có test và đã PASS | 100 % |
 | 8 | Mutation testing: mọi lỗi cấy vào RTL bị phát hiện | 100 % |
 
-### 9.2 Kết quả (regression 22 test × sync/async × 3 seed)
+### 9.2 Kết quả (v1.3: regression 24 test × sync/async × 3 seed)
 
 | Chỉ số | Kết quả | Đạt |
 |---|---|---|
-| Regression | 132 / 132 PASS (~106 s với 14 tiến trình song song). Thêm 80/80 PASS khi quét 20 seed cho `dma_rand_prog_test` và `dma_cmodel_mix_test` | ✔ |
-| Statement | 99.88 % (843/844) | ✔ (dòng còn thiếu: swap 128 bit, xem 9.3) |
-| Branch | 98.94 % (562/568) | ✔ |
-| FEC condition | 92.15 % (141/153) | ✔ |
-| FEC expression | 95.95 % (261/272) | ✔ |
+| Regression | 144 / 144 PASS có coverage (~330 s với 4 tiến trình song song). Thêm 240/240 PASS khi chạy 5 seed khác (11–15) cho mọi test | ✔ |
+| Statement | 99.89 % (930/931) | ✔ (dòng còn thiếu: swap 128 bit, xem 9.3) |
+| Branch | 99.04 % (624/630) | ✔ |
+| FEC condition | 92.99 % (146/157) | ✔ |
+| FEC expression | 95.63 % (307/321) | ✔ |
 | FSM state / transition | 100 % (19/19) / 100 % (27/27) | ✔ |
 | Covergroup bin | 100 % (188/188) | ✔ |
-| Cover directive | 95.55 % (43/45) | ✔ (2 mục không thể tới: `AFIFO_C_FULL` của FIFO B và R) |
-| Assertion | 144, 0 fail; 141 đã pass ít nhất một lần | ✔ (3 assertion vacuous, xem 9.3) |
-| Mutation | 6/6 lỗi (v1.0), 9/9 lỗi (v1.1), 4/4 lỗi (v1.2, C model) bị phát hiện | ✔ |
+| Cover directive | 100 % (44/44) | ✔ |
+| Assertion | 151, 0 fail; 146 đã pass ít nhất một lần | ✔ (5 assertion vacuous, xem 9.3) |
+| Mutation | 6/6 lỗi (v1.0), 9/9 lỗi (v1.1), 4/4 lỗi (v1.2, C model), 12/12 lỗi (v1.3, MFIFO dùng chung + security) bị phát hiện | ✔ |
+
+Code coverage theo design unit của khối mới ở v1.3: `dma_mfifo` 100 % statement/branch/FEC; `dma_regs` 100 % statement/branch/FEC condition, 96.97 % FEC expression; `dma_datapath` 100 % statement/branch/FEC condition. Phần FEC expression còn thiếu của `dma_datapath` là theo từng kênh (ví dụ self lock-up chỉ xảy ra ở kênh victim 1..3 của `dma_fault_test`, không ở kênh 0).
+
+Mutation cho v1.3 (`sim/run_mutation.py`, bản sao cây thư mục, 24 test, cấu hình sync, seed 1):
+
+| Mutant | Lỗi cấy vào RTL | Test phát hiện |
+|---|---|---|
+| M5 | Line đã pop hết không bao giờ về pool | 23/24 test |
+| M6 | Head không chuyển sang line mới khi line duy nhất được trả và line mới được lấy trong cùng chu kỳ | endian, kill, loop2d, multi_ch, rand_prog |
+| M7 | Đặt chỗ bỏ qua line đang dùng dở (đặt thiếu) | 22/24 test (SVA `MFIFO_ALLOC_HAS_LINE`, `DP_LINES_RESERVED`) |
+| M8 | Kênh có stream rỗng không trả line dùng dở | mfifo_share (lần chạy đầu **không phát hiện**; đã bổ sung kênh C vào kịch bản deadlock) |
+| M9 | Không bao giờ báo deadlock | mfifo_share |
+| M10 | Cổng NS thấy thanh ghi của kênh secure | security |
+| M11 | Ghi `INTEN` từ cổng NS đổi cả bit secure | security |
+| M12 | Lệnh debug từ cổng NS tới được kênh secure | security |
+| M13 | Kênh NS dùng được event secure | security |
+| M14 | Một `DBGINST0` chung cho hai cổng | security |
+| M15 | Cổng NS không chờ khi hai cổng truy cập cùng chu kỳ | security (kịch bản truy cập đồng thời) |
+| M16 | Cổng NS thấy manager secure | security |
 
 Mutation testing, đo khi bộ test còn 13 test (số test fail / 13):
 
@@ -549,9 +587,8 @@ Lần chạy đầu, mutation "không giữ `PREADY`" không bị phát hiện. 
 | Opcode `0x2A` (`DMALPFE` LC0 bs=1 không điều kiện) | Mã trùng nghĩa với `0x28`, assembler không sinh ra |
 | `endian_swap` kiểu 128 bit (`CCR.swap = 4`) trong `dma330_pkg` | Chỉ có nghĩa khi `DATA_W = 128`; cần chạy cấu hình 128 bit (mục 10.2). Đây là statement duy nhất chưa phủ |
 | Watchdog: bộ đếm đạt timeout rồi progress quay lại đúng chu kỳ báo, hoặc trạng thái `Stopped`/`Killing` ở các nhánh `wd_can_fault` | Cửa sổ một chu kỳ; phần tử còn thiếu của FEC condition, hành vi đã đúng theo thiết kế |
-| Assertion có 0 lần pass (vacuous): `AXI_S_B_STABLE`, `AXI_S_R_STABLE`, `CDC_DATA_STABLE` ở instance `u_rsp_cdc` | Điều kiện tiền đề (`bvalid && !bready`, `rvalid && !rready`, payload CDC đổi khi chờ) hiếm khi xảy ra vì DUT luôn sẵn sàng nhận B/R. Không có assertion nào fail |
+| Assertion có 0 lần pass (vacuous): `AXI_S_B_STABLE`, `AXI_S_R_STABLE`, `CDC_DATA_STABLE` ở `u_rsp_cdc` của hai APB bridge và ở `u_dr_cdc` của peripheral 3 | Điều kiện tiền đề (`bvalid && !bready`, `rvalid && !rready`, phía đích chưa nhận payload CDC) hiếm khi xảy ra vì DUT luôn sẵn sàng nhận B/R và phía lõi nhận request ngay. Không có assertion nào fail |
 | Số event/peripheral ngoài phạm vi tại `dma_event_irq`/`dma_periph_ctrl` | Đã bị kênh/manager lọc thành lỗi trước đó; không thể tới được |
-| `AFIFO_C_FULL` của FIFO B và R phía lõi | Lõi luôn nhận B/R ngay (không back-pressure), FIFO không bao giờ đầy |
 | APB bridge bị back-pressure / bin `cg_apb.long_w` (≥ 4 wait) | Requester chỉ phát một transfer mỗi lần; độ trễ async là 1–3 chu kỳ `pclk` |
 | `PSLVERR` ở cấu hình sync | Với `APB_SLVERR = 0` DUT không bao giờ sinh `PSLVERR` (đúng đặc tả); trường hợp có lỗi được kiểm tra ở cấu hình async |
 | Lỗi dữ liệu khi kênh đã ở `FAULTING` | Kênh chỉ vào Faulting khi mọi burst đã retire |
@@ -579,7 +616,7 @@ Lần chạy đầu, mutation "không giữ `PREADY`" không bị phát hiện. 
 | TB | Race khi gây lỗi manager trong lúc kênh khác dùng debug | Fault test (giải bằng `dbg_lock`) |
 | TB | Trang "đỉnh bộ nhớ" dùng chung giữa các kênh: kênh này nạp lại dữ liệu ngẫu nhiên vào nguồn trong lúc kênh khác đang đọc, nên dự đoán của C model (lấy lúc nạp job) lệch dữ liệu DUT đọc thật | `dma_rand_prog_test` (SB_WR); giới hạn kernel đỉnh bộ nhớ cho một kênh |
 | TB | Chuỗi/comment "v_new reset" do thay thế nhầm (đúng là "after reset") | Review môi trường (đọc code) |
-| TB | `AFIFO_C_FULL` của FIFO AW không còn phủ sau khi thêm enum `JOB_RAND` làm đổi lời giải random của test cũ; sự kiện hiếm phụ thuộc seed | Cover directive 42/45 → profile AXI `choke` trong `cmodel_mix` đưa về 43/45 |
+| TB | `AFIFO_C_FULL` của FIFO AW (AXI async bridge, đã bỏ ở v1.3) không còn phủ sau khi thêm enum `JOB_RAND` làm đổi lời giải random của test cũ; sự kiện hiếm phụ thuộc seed | Cover directive 42/45 → profile AXI `choke` trong `cmodel_mix` đưa về 43/45 |
 
 ### 10.2 Việc tiếp theo
 
@@ -593,7 +630,7 @@ Từ review môi trường kiểm thử (2026-10-23), theo mức ưu tiên. Mụ
 | 4 | Dữ liệu nguồn ngẫu nhiên trong **mọi** test (hiện chỉ test mới dùng `randomize_region`; test cũ dùng mẫu theo địa chỉ `default_byte`) | Chưa |
 | 5 | Chuỗi dữ liệu giữa kênh/job (đích của job này là nguồn của job kia), nguồn và đích chồng lấn | Chưa: vùng địa chỉ mỗi kênh tách rời |
 | 6 | Ma trận tham số DUT: `dma_tb_params_pkg` là `localparam` nên `vopt -G` không đổi được; VIP AXI lại có macro `AXI_DATA_W` riêng (hai nguồn sự thật, dễ lệch). Cần một nguồn tham số duy nhất (macro hoặc package sinh tự động) | Chưa |
-| 7 | Tần số và pha clock, thời điểm nhả reset theo seed (hiện cố định 200/79/135/122… MHz, reset nhả ở 103 ns) | Chưa |
+| 7 | Tần số và pha clock, thời điểm nhả reset theo seed (hiện cố định 200/79/122… MHz, reset nhả ở 103 ns) | Chưa |
 | 8 | Coverage phía DUT thay cho phía stimulus: `cg_job` lấy mẫu knob, `cg_insn` lấy mẫu byte đã assemble. Thiếu: số kênh hoạt động đồng thời, RQ/WQ/MFIFO đầy, outstanding chạm `RD_OUT/WR_OUT`, cross trạng thái kênh × sự kiện | Chưa |
 | 9 | SVA còn thiếu: `WDATA = 0` ở lane không strobe (đặc tả 4.7.4 cam kết), `WSTRB` hợp lệ theo beat, outstanding ≤ `RD_OUT/WR_OUT`, `AWLOCK = 0`, `AxCACHE[3] = 0`, ID hợp lệ | Chưa |
 | 10 | Mutation testing có script và danh sách patch trong repo (các đợt v1.0/v1.1 làm thủ công trên bản sao, số liệu ghi tay) | Một phần: `sim/run_mutation.py` chạy 4 lỗi của v1.2 và so môi trường cũ/mới; các lỗi v1.0/v1.1 chưa được đưa vào |
@@ -603,7 +640,9 @@ Từ review môi trường kiểm thử (2026-10-23), theo mức ưu tiên. Mụ
 
 Các việc đã có từ trước:
 
-1. Chạy regression với `DATA_W = 32` và `128`, `NUM_CH = 1` và `8`, `MFIFO_LINES = 8`. TB đã tham số hóa sẵn qua `dma_tb_params_pkg`.
+1. Chạy regression với `DATA_W = 32` và `128`, `NUM_CH = 1` và `8`, `MFIFO_LINES = 32` và `1024`. TB đã tham số hóa sẵn qua `dma_tb_params_pkg`.
+4. Security: `DMAFLUSHP` của manager NS với peripheral secure (cần chương trình boot của manager NS) và `WDSTAT` từ cổng NS chưa có test directed; RTL đơn giản, đã review.
+5. Cấp phát MFIFO công bằng: một `DMALD` lớn có thể bị các `DMALD` nhỏ của kênh khác vượt mặt lâu dài (không có giữ chỗ). Chưa có test đo độ trễ tối đa.
 2. Chạy CDC structural bằng công cụ chuyên dụng.
 3. Đo hiệu năng: băng thông với `AXI_PROFILE=fast`, độ trễ từ `DMAGO` tới AR đầu tiên.
 4. Tăng số seed cho `dma_stress_test` (≥ 50) trong regression đêm.

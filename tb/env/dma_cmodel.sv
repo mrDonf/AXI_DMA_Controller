@@ -116,7 +116,7 @@ class dma_cmodel extends uvm_object;
         end
         DM_EV_SEV: r.sev.push_back(int'(ev(F_EVENT_NO)));
         DM_EV_WFE: ;
-        default: begin                       // END, KILL, FAULT, STARVED, UNKNOWN, RUNAWAY
+        default: begin                       // END, KILL, FAULT, STARVED, UNKNOWN, RUNAWAY, UNSURE
           r.end_kind = k;
           done = 1;
         end

@@ -4,8 +4,8 @@ run_regression.py - QuestaSim build + parallel regression for the AXI DMA.
 
 Speed-ups used:
   * vlog compiles everything once into one library
-  * vopt builds the two snapshots (sync / async CDC configuration) in
-    parallel processes, each using parallel code generation (vopt -j N)
+  * vopt builds the two snapshots (sync / async CDC configuration) one
+    after the other, each using parallel code generation (vopt -j N)
   * every (test, config, seed) simulation runs as its own vsim process,
     N at a time (multi-core regression), all reading the same snapshots
 
@@ -57,6 +57,8 @@ TESTS = [
     "dma_lowpower_test",
     "dma_rand_prog_test",
     "dma_cmodel_mix_test",
+    "dma_mfifo_share_test",
+    "dma_security_test",
 ]
 CMODEL_TESTS = {"dma_rand_prog_test", "dma_cmodel_mix_test"}    # need the C model as only predictor
 CONFIGS = {"sync": 0, "async": 1}

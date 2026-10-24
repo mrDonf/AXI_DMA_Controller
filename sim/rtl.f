@@ -4,9 +4,7 @@
 ../rtl/cdc/dma_sync_2ff.sv
 ../rtl/cdc/dma_rst_sync.sv
 ../rtl/cdc/dma_cdc_handshake.sv
-../rtl/cdc/dma_async_fifo.sv
 ../rtl/cdc/dma_apb_async_bridge.sv
-../rtl/cdc/dma_axi_async_bridge.sv
 ../rtl/cdc/dma_periph_sync.sv
 ../rtl/core/dma_mfifo.sv
 ../rtl/core/dma_rd_engine.sv

@@ -1,7 +1,8 @@
 //==============================================================================
 // dma_regs.sv
 //------------------------------------------------------------------------------
-// APB register file (core clock domain), DMA-330 compatible register map.
+// APB register file (core clock domain), DMA-330 compatible register map,
+// with a secure and a non-secure APB slave port.
 //
 //   0x000 DSR            RO  manager status
 //   0x004 DPC            RO  manager PC
@@ -21,15 +22,29 @@
 //   0xD04 DBGCMD         WO  write 0 to execute DBGINST0/1
 //   0xD08 DBGINST0       RW  [0] thread (0 mgr / 1 ch), [10:8] ch, [31:16] byte0..1
 //   0xD0C DBGINST1       RW  bytes 2..5
-//   0xE00..0xE14 CR0-4, CRD   RO  configuration
+//   0xE00..0xE14 CR0-4, CRD   RO  configuration (CR3 / CR4: event / peripheral security)
 //   0xE80 WD             RW  watchdog: [0] irq_only, [31:16] timeout (x256 clk)
 //   0xE84 WDSTAT         W1C channel lock-up detected (bit per channel) (extension)
 //   0xFE0..0xFFC         RO  peripheral / component identification
 //
-// The APB slave is zero-wait-state (PREADY = 1). With APB_SLVERR = 1, an
-// access to an unmapped address or a write to a read-only register completes
-// with PSLVERR = 1 (and has no effect); with APB_SLVERR = 0 (DMA-330
-// behaviour) PSLVERR is never asserted.
+// Security
+//   * The secure port sees and controls everything.
+//   * The non-secure port sees only non-secure resources: the manager when
+//     DSR.DNS = 1, channel n when CSRn.CNS = 1, event e when CR3[e] = 1.
+//     Registers (or bits) of secure resources read as zero and ignore writes
+//     (no PSLVERR). WD is secure only; WDSTAT shows / clears the bits of the
+//     non-secure channels. CR0-4, CRD, DBGSTATUS and the ID registers read the
+//     same on both ports.
+//   * Each port has its own DBGINST0/1, so one world cannot change a debug
+//     instruction the other world is about to issue. A debug instruction from
+//     the non-secure port is ignored when its target thread is secure.
+//   * CR3 / CR4 are taken from boot_irq_ns / boot_periph_ns once after reset.
+//
+// Both ports are zero-wait-state except when they access in the same cycle:
+// the secure access completes, the non-secure one waits one cycle
+// (PREADY_NS = 0). With APB_SLVERR = 1, an access to an unmapped address or a
+// write to a read-only register completes with PSLVERR = 1 (and has no
+// effect); with APB_SLVERR = 0 (DMA-330 behaviour) PSLVERR is never asserted.
 //==============================================================================
 module dma_regs
   import dma330_pkg::*;
@@ -44,14 +59,14 @@ module dma_regs
   parameter int          WQ_DEPTH    = 4,
   parameter int          RD_OUT      = 4,
   parameter int          WR_OUT      = 4,
-  parameter int          MFIFO_LINES = 32,
+  parameter int          MFIFO_LINES = 128,
   parameter logic [31:0] PERIPH_ID   = 32'h0000_0330,
   parameter bit          APB_SLVERR  = 1'b0
 ) (
   input  logic                    clk,
   input  logic                    rst_n,
 
-  // APB (core clock)
+  // APB, secure port (core clock)
   input  logic                    psel,
   input  logic                    penable,
   input  logic                    pwrite,
@@ -61,10 +76,26 @@ module dma_regs
   output logic [31:0]             prdata,
   output logic                    pslverr,
 
-  // Boot configuration (reported in CR0 / CR2)
+  // APB, non-secure port (core clock)
+  input  logic                    psel_ns,
+  input  logic                    penable_ns,
+  input  logic                    pwrite_ns,
+  input  logic [11:0]             paddr_ns,
+  input  logic [31:0]             pwdata_ns,
+  output logic                    pready_ns,
+  output logic [31:0]             prdata_ns,
+  output logic                    pslverr_ns,
+
+  // Boot configuration (reported in CR0 / CR2 / CR3 / CR4)
   input  logic                    boot_from_pc,
   input  logic [31:0]             boot_addr,
   input  logic                    boot_manager_ns,
+  input  logic [NUM_EVENTS-1:0]   boot_irq_ns,
+  input  logic [NUM_PERIPH-1:0]   boot_periph_ns,
+
+  // Event / peripheral security, as captured after reset (CR3 / CR4)
+  output logic [NUM_EVENTS-1:0]   irq_ns,
+  output logic [NUM_PERIPH-1:0]   periph_ns,
 
   // Manager status
   input  logic [31:0]             dsr,
@@ -104,6 +135,7 @@ module dma_regs
   // Debug: channel threads
   output logic [NUM_CH-1:0]       ch_dbg_kill,
   output logic [NUM_CH-1:0]       ch_dbg_fault,
+  output logic [NUM_CH-1:0]       ch_dbg_evnt_fault,
   output logic                    dbg_sev_valid,
   output logic [4:0]              dbg_sev_event,
   output logic                    dbg_busy
@@ -142,18 +174,33 @@ module dma_regs
   localparam logic [31:0] PCELL_ID    = 32'hB105_F00D;
 
   //----------------------------------------------------------------------------
-  // Access decode
+  // Port arbitration: one access per cycle, the secure port first
   //----------------------------------------------------------------------------
-  logic wr_en;
+  logic        acc_s, acc_n, acc;
+  logic        a_write;
   logic [11:0] addr;
+  logic [31:0] wdata;
+  logic        wr_en;
+  logic        mapped, writable, acc_err;
+  logic [31:0] rdata;
 
-  logic mapped, writable, acc_err;
+  assign acc_s   = psel && penable;
+  assign acc_n   = psel_ns && penable_ns && !acc_s;
+  assign acc     = acc_s || acc_n;
 
-  assign addr    = {paddr[11:2], 2'b00};
-  assign acc_err = APB_SLVERR && (!mapped || (pwrite && !writable));
-  assign wr_en   = psel && penable && pwrite && !acc_err;
-  assign pready  = 1'b1;
-  assign pslverr = psel && penable && acc_err;
+  assign a_write = acc_n ? pwrite_ns : pwrite;
+  assign addr    = acc_n ? {paddr_ns[11:2], 2'b00} : {paddr[11:2], 2'b00};
+  assign wdata   = acc_n ? pwdata_ns : pwdata;
+
+  assign acc_err = APB_SLVERR && (!mapped || (a_write && !writable));
+  assign wr_en   = acc && a_write && !acc_err;
+
+  assign pready     = 1'b1;
+  assign pready_ns  = !acc_s;
+  assign prdata     = rdata;
+  assign prdata_ns  = rdata;
+  assign pslverr    = acc_s && acc_err;
+  assign pslverr_ns = acc_n && acc_err;
 
   // Address decode: which offsets exist and which accept writes
   always_comb begin
@@ -183,23 +230,56 @@ module dma_regs
   end
 
   //----------------------------------------------------------------------------
-  // Writable registers
+  // Security configuration (captured once after reset) and the resources the
+  // current access may see
   //----------------------------------------------------------------------------
-  logic [31:0] dbg_inst0, dbg_inst1, wd_reg;
+  logic                  sec_cfg_done;
+  logic [NUM_CH-1:0]     ch_ns, ch_vis;
+  logic [NUM_EVENTS-1:0] ev_vis;
+  logic                  mgr_vis;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      inten     <= '0;
-      dbg_inst0 <= '0;
-      dbg_inst1 <= '0;
-      wd_reg    <= '0;
+      sec_cfg_done <= 1'b0;
+      irq_ns       <= '0;
+      periph_ns    <= '0;
+    end else if (!sec_cfg_done) begin
+      sec_cfg_done <= 1'b1;
+      irq_ns       <= boot_irq_ns;
+      periph_ns    <= boot_periph_ns;
+    end
+  end
+
+  for (genvar n = 0; n < NUM_CH; n++) begin : g_ch_ns
+    assign ch_ns[n] = ch_csr[n][21];                  // CSRn.CNS
+  end
+
+  assign mgr_vis = !acc_n || dsr[9];                  // DSR.DNS
+  assign ch_vis  = acc_n ? ch_ns  : '1;
+  assign ev_vis  = acc_n ? irq_ns : '1;
+
+  //----------------------------------------------------------------------------
+  // Writable registers
+  //----------------------------------------------------------------------------
+  logic [31:0] dbg_inst0, dbg_inst1, dbg_inst0_ns, dbg_inst1_ns, wd_reg;
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      inten        <= '0;
+      dbg_inst0    <= '0;
+      dbg_inst1    <= '0;
+      dbg_inst0_ns <= '0;
+      dbg_inst1_ns <= '0;
+      wd_reg       <= '0;
     end else if (wr_en) begin
       case (addr)
-        A_INTEN:    inten     <= pwdata[NUM_EVENTS-1:0];
+        A_INTEN:    inten <= (inten & ~ev_vis) | (wdata[NUM_EVENTS-1:0] & ev_vis);
         // Reserved bits [15:11] and [7:1] are not implemented (read as 0)
-        A_DBGINST0: dbg_inst0 <= pwdata & 32'hFFFF_0701;
-        A_DBGINST1: dbg_inst1 <= pwdata;
-        A_WD:       wd_reg    <= pwdata & 32'hFFFF_0001;
+        A_DBGINST0: if (acc_n) dbg_inst0_ns <= wdata & 32'hFFFF_0701;
+                    else       dbg_inst0    <= wdata & 32'hFFFF_0701;
+        A_DBGINST1: if (acc_n) dbg_inst1_ns <= wdata;
+                    else       dbg_inst1    <= wdata;
+        A_WD:       if (!acc_n) wd_reg <= wdata & 32'hFFFF_0001;
         default: ;
       endcase
     end
@@ -211,51 +291,76 @@ module dma_regs
   // WDSTAT: set by the watchdog, cleared by writing 1 (set wins)
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) wd_stat <= '0;
-    else        wd_stat <= (wd_stat & ~((wr_en && addr == A_WDSTAT) ? pwdata[NUM_CH-1:0] : '0))
+    else        wd_stat <= (wd_stat & ~((wr_en && addr == A_WDSTAT) ? wdata[NUM_CH-1:0] & ch_vis : '0))
                            | wd_lockup_set;
   end
 
   assign intclr_we   = wr_en && (addr == A_INTCLR);
-  assign intclr_mask = pwdata[NUM_EVENTS-1:0];
+  assign intclr_mask = wdata[NUM_EVENTS-1:0] & ev_vis;
 
   //----------------------------------------------------------------------------
-  // Debug instruction dispatch
+  // Debug instruction dispatch (DBGINST0/1 of the port that writes DBGCMD)
   //----------------------------------------------------------------------------
   logic              dbg_go;          // DBGCMD written with "execute"
   logic              dbg_mgr_busy;
+  logic              dbg_mgr_ns;      // pending manager instruction came from the NS port
   logic              dbg_to_ch;
   logic [2:0]        dbg_ch;
+  logic [31:0]       dbg_i0;
   logic [INSN_W-1:0] dbg_insn;
   insn_e             dbg_cls;
+  logic              dbg_mgr_ok, dbg_ch_ok;
 
-  assign dbg_insn  = {dbg_inst1, dbg_inst0[31:16]};
-  assign dbg_ch    = dbg_inst0[10:8];
-  assign dbg_to_ch = dbg_inst0[0];
+  assign dbg_i0    = acc_n ? dbg_inst0_ns : dbg_inst0;
+  assign dbg_insn  = acc_n ? {dbg_inst1_ns, dbg_inst0_ns[31:16]} : {dbg_inst1, dbg_inst0[31:16]};
+  assign dbg_ch    = dbg_i0[10:8];
+  assign dbg_to_ch = dbg_i0[0];
   assign dbg_cls   = decode_op(dbg_insn[7:0]);
-  assign dbg_go    = wr_en && (addr == A_DBGCMD) && (pwdata[1:0] == 2'b00) && !dbg_mgr_busy;
+  assign dbg_go    = wr_en && (addr == A_DBGCMD) && (wdata[1:0] == 2'b00) && !dbg_mgr_busy;
+
+  // The non-secure port may only drive non-secure threads
+  assign dbg_mgr_ok = !acc_n || dsr[9];
+  assign dbg_ch_ok  = (int'(dbg_ch) < NUM_CH) && (!acc_n || ch_ns[dbg_ch]);
 
   always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n)                        dbg_mgr_busy <= 1'b0;
-    else if (dbg_go && !dbg_to_ch)     dbg_mgr_busy <= 1'b1;
-    else if (mgr_dbg_done)             dbg_mgr_busy <= 1'b0;
+    if (!rst_n) begin
+      dbg_mgr_busy <= 1'b0;
+      dbg_mgr_ns   <= 1'b0;
+    end else if (dbg_go && !dbg_to_ch && dbg_mgr_ok) begin
+      dbg_mgr_busy <= 1'b1;
+      dbg_mgr_ns   <= acc_n;
+    end else if (mgr_dbg_done) begin
+      dbg_mgr_busy <= 1'b0;
+    end
   end
 
   assign mgr_dbg_valid = dbg_mgr_busy;
   assign dbg_busy      = dbg_mgr_busy;
-  assign mgr_dbg_insn  = dbg_insn;
+  assign mgr_dbg_insn  = dbg_mgr_ns ? {dbg_inst1_ns, dbg_inst0_ns[31:16]}
+                                    : {dbg_inst1, dbg_inst0[31:16]};
 
-  // Channel-thread debug instructions take effect immediately
+  // Channel-thread debug instructions take effect immediately. A DMASEV of a
+  // secure event to a non-secure channel faults it (ch_evnt_err), as the same
+  // instruction in its program would.
+  logic [31:0] irq_ns32;
+  assign irq_ns32 = 32'(irq_ns);
+
   always_comb begin
-    ch_dbg_kill   = '0;
-    ch_dbg_fault  = '0;
-    dbg_sev_valid = 1'b0;
-    dbg_sev_event = dbg_insn[15:11];
-    if (dbg_go && dbg_to_ch && int'(dbg_ch) < NUM_CH) begin
+    ch_dbg_kill       = '0;
+    ch_dbg_fault      = '0;
+    ch_dbg_evnt_fault = '0;
+    dbg_sev_valid     = 1'b0;
+    dbg_sev_event     = dbg_insn[15:11];
+    if (dbg_go && dbg_to_ch && dbg_ch_ok) begin
       case (dbg_cls)
         I_KILL:  ch_dbg_kill[dbg_ch] = 1'b1;
         I_SEV: begin
-          if (int'(dbg_sev_event) < NUM_EVENTS) dbg_sev_valid       = 1'b1;
-          else                                  ch_dbg_fault[dbg_ch] = 1'b1;
+          if (int'(dbg_sev_event) >= NUM_EVENTS)
+            ch_dbg_fault[dbg_ch] = 1'b1;
+          else if (ch_ns[dbg_ch] && !irq_ns32[dbg_sev_event])
+            ch_dbg_evnt_fault[dbg_ch] = 1'b1;
+          else
+            dbg_sev_valid = 1'b1;
         end
         default: ch_dbg_fault[dbg_ch] = 1'b1;
       endcase
@@ -278,7 +383,7 @@ module dma_regs
                 1'b1};                          // [0] peripheral requests
   assign cr1 = {24'd0, 4'(IC_LINES - 1), 1'b0, 3'($clog2(LINE_BYTES))};
   assign crd = {2'd0,
-                10'(NUM_CH * MFIFO_LINES - 1),  // [29:20] data buffer lines
+                10'(MFIFO_LINES - 1),           // [29:20] data buffer lines (shared)
                 4'(RQ_DEPTH - 1),               // [19:16]
                 1'b0,
                 3'(RD_OUT - 1),                 // [14:12]
@@ -289,50 +394,52 @@ module dma_regs
                 3'($clog2(DATA_W / 8))};        // [2:0] 2:32b 3:64b 4:128b
 
   //----------------------------------------------------------------------------
-  // Read multiplexer
+  // Read multiplexer (resources hidden from the current port read as zero)
   //----------------------------------------------------------------------------
   always_comb begin
-    prdata = '0;
+    rdata = '0;
     case (addr)
-      A_DSR:       prdata = dsr;
-      A_DPC:       prdata = dpc;
-      A_INTEN:     prdata = 32'(inten);
-      A_RIS:       prdata = 32'(ev_flag);
-      A_INTMIS:    prdata = 32'(ev_flag & inten);
-      A_FSRD:      prdata = {31'd0, mgr_faulting};
-      A_FSRC:      prdata = 32'(ch_faulting);
-      A_FTRD:      prdata = ftrd;
-      A_DBGSTATUS: prdata = {31'd0, dbg_mgr_busy};
-      A_DBGINST0:  prdata = dbg_inst0;
-      A_DBGINST1:  prdata = dbg_inst1;
-      A_CR0:       prdata = cr0;
-      A_CR1:       prdata = cr1;
-      A_CR2:       prdata = boot_addr;
-      A_CR3:       prdata = '0;
-      A_CR4:       prdata = '0;
-      A_CRD:       prdata = crd;
-      A_WD:        prdata = wd_reg;
-      A_WDSTAT:    prdata = 32'(wd_stat);
+      A_DSR:       rdata = mgr_vis ? dsr : '0;
+      A_DPC:       rdata = mgr_vis ? dpc : '0;
+      A_INTEN:     rdata = 32'(inten & ev_vis);
+      A_RIS:       rdata = 32'(ev_flag & ev_vis);
+      A_INTMIS:    rdata = 32'(ev_flag & inten & ev_vis);
+      A_FSRD:      rdata = {31'd0, mgr_vis && mgr_faulting};
+      A_FSRC:      rdata = 32'(ch_faulting & ch_vis);
+      A_FTRD:      rdata = mgr_vis ? ftrd : '0;
+      A_DBGSTATUS: rdata = {31'd0, dbg_mgr_busy};
+      A_DBGINST0:  rdata = acc_n ? dbg_inst0_ns : dbg_inst0;
+      A_DBGINST1:  rdata = acc_n ? dbg_inst1_ns : dbg_inst1;
+      A_CR0:       rdata = cr0;
+      A_CR1:       rdata = cr1;
+      A_CR2:       rdata = boot_addr;
+      A_CR3:       rdata = 32'(irq_ns);
+      A_CR4:       rdata = 32'(periph_ns);
+      A_CRD:       rdata = crd;
+      A_WD:        rdata = acc_n ? '0 : wd_reg;
+      A_WDSTAT:    rdata = 32'(wd_stat & ch_vis);
       default: ;
     endcase
 
     // Per-channel registers
     for (int n = 0; n < NUM_CH; n++) begin
-      if (addr == A_FTR0 + 12'(4 * n))        prdata = ch_ftr[n];
-      if (addr == A_FAR0 + 12'(4 * n))        prdata = ch_far[n];
-      if (addr == A_CSR0 + 12'(8 * n))        prdata = ch_csr[n];
-      if (addr == A_CSR0 + 12'(8 * n + 4))    prdata = ch_cpc[n];
-      if (addr == A_SAR0 + 12'(32 * n))       prdata = ch_sar[n];
-      if (addr == A_SAR0 + 12'(32 * n + 4))   prdata = ch_dar[n];
-      if (addr == A_SAR0 + 12'(32 * n + 8))   prdata = ch_ccr[n];
-      if (addr == A_SAR0 + 12'(32 * n + 12))  prdata = ch_lc0[n];
-      if (addr == A_SAR0 + 12'(32 * n + 16))  prdata = ch_lc1[n];
+      if (ch_vis[n]) begin
+        if (addr == A_FTR0 + 12'(4 * n))        rdata = ch_ftr[n];
+        if (addr == A_FAR0 + 12'(4 * n))        rdata = ch_far[n];
+        if (addr == A_CSR0 + 12'(8 * n))        rdata = ch_csr[n];
+        if (addr == A_CSR0 + 12'(8 * n + 4))    rdata = ch_cpc[n];
+        if (addr == A_SAR0 + 12'(32 * n))       rdata = ch_sar[n];
+        if (addr == A_SAR0 + 12'(32 * n + 4))   rdata = ch_dar[n];
+        if (addr == A_SAR0 + 12'(32 * n + 8))   rdata = ch_ccr[n];
+        if (addr == A_SAR0 + 12'(32 * n + 12))  rdata = ch_lc0[n];
+        if (addr == A_SAR0 + 12'(32 * n + 16))  rdata = ch_lc1[n];
+      end
     end
 
     // Identification: one byte per word
     for (int k = 0; k < 4; k++) begin
-      if (addr == A_PERIPH_ID + 12'(4 * k)) prdata = {24'd0, PERIPH_ID[k*8 +: 8]};
-      if (addr == A_PCELL_ID  + 12'(4 * k)) prdata = {24'd0, PCELL_ID[k*8 +: 8]};
+      if (addr == A_PERIPH_ID + 12'(4 * k)) rdata = {24'd0, PERIPH_ID[k*8 +: 8]};
+      if (addr == A_PCELL_ID  + 12'(4 * k)) rdata = {24'd0, PCELL_ID[k*8 +: 8]};
     end
   end
 

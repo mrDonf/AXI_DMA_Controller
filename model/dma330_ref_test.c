@@ -90,11 +90,12 @@ static unsigned g_nreq;
 
 static rec_t   g_ev[MAX_EV];
 static unsigned g_n;
+static int      g_ns;                                   /* DMAGO ns of run() */
 static dm_ev_kind_t g_last;
 
 static dma330_t* new_model(void)
 {
-    dma330_cfg_t c = { 8, 16, 4, 256, 0 };
+    dma330_cfg_t c = { 8, 16, 4, 256, 0 };          /* 8-byte bus, MFIFO of 32 lines */
     dma330_t* m = dma330_new(&c);
     return m;
 }
@@ -117,7 +118,7 @@ static dm_ev_kind_t run(dma330_t* m, const prog_t* p)
     dm_ev_kind_t k;
     unsigned i;
     g_n = 0;
-    dma330_go(m, CODE_BASE, 0);
+    dma330_go(m, CODE_BASE, g_ns);
     for (i = 0; i < g_nreq; i++) dma330_periph_req(m, g_reqs[i].per, g_reqs[i].burst, g_reqs[i].last);
     for (;;) {
         k = dma330_step(m);
@@ -139,7 +140,7 @@ static dm_ev_kind_t run(dma330_t* m, const prog_t* p)
             continue;
         }
         if (k == DM_EV_END || k == DM_EV_KILL || k == DM_EV_FAULT || k == DM_EV_UNKNOWN ||
-            k == DM_EV_RUNAWAY || k == DM_EV_STARVED)
+            k == DM_EV_RUNAWAY || k == DM_EV_STARVED || k == DM_EV_UNSURE)
             break;
     }
     g_last = k;
@@ -465,17 +466,86 @@ static void test_faults(void)
     p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 2, 0x2000); p_mov(&p, 1, ccr(1, 3, 2, 1, 3, 3, 0)); p_ld(&p, 0); p_st(&p, 0);
     CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 13), "24-byte store, 16 loaded");
 
-    /* both a 4 KB crossing and a lock-up: the lock-up bit is timing dependent */
+    /* both a 4 KB crossing and a lock-up: only the other fault is reported */
     p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 1, ccr(1, 3, 16, 1, 3, 16, 0)); p_ld(&p, 0); p_ld(&p, 0);
     p_mov(&p, 0, 0x1F80 + 0x40); p_ld(&p, 0);
     CHECK(run(m, &p) == DM_EV_FAULT, "faults");
-    CHECK(dma330_reg(m, DM_R_FTR) == (1u << 7) && dma330_reg(m, DM_R_FTR_MAYBE) == (1u << 12),
-          "rdwr certain, mfifo only possible (FTR=%x maybe=%x)", dma330_reg(m, DM_R_FTR), dma330_reg(m, DM_R_FTR_MAYBE));
+    CHECK(dma330_reg(m, DM_R_FTR) == (1u << 7) && dma330_reg(m, DM_R_FTR_MAYBE) == 0,
+          "rdwr only, no mfifo_err (FTR=%x maybe=%x)", dma330_reg(m, DM_R_FTR), dma330_reg(m, DM_R_FTR_MAYBE));
 
     /* a condition that is false never faults */
     p.n = 0; p_mov(&p, 2, 0x2000); p_mov(&p, 1, ccr(1, 3, 16, 1, 3, 16, 0)); p_st(&p, 3); p_end(&p);
     CHECK(run(m, &p) == DM_EV_END, "DMASTB with request_type single is a NOP");
 
+    dma330_free(m);
+}
+
+/* Shared MFIFO of 32 lines x 8 bytes: lock-up counted in lines */
+static void test_mfifo_lines(void)
+{
+    dma330_t* m = new_model();
+    prog_t p = {{0}, 0};
+    printf("shared MFIFO: line accounting\n");
+
+    /* 256 B loaded, all stored, then another 256 B: an empty stream holds no line */
+    p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 2, 0x3000); p_mov(&p, 1, ccr(1, 3, 16, 1, 3, 16, 0));
+    p_ld(&p, 0); p_ld(&p, 0); p_st(&p, 0); p_st(&p, 0); p_ld(&p, 0); p_ld(&p, 0); p_st(&p, 0); p_st(&p, 0); p_end(&p);
+    CHECK(run(m, &p) == DM_EV_END, "pool reused after the stream drained");
+
+    /* exactly the pool, aligned: fits */
+    p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 1, ccr(1, 3, 16, 1, 3, 1, 0));
+    p_ld(&p, 0); p_ld(&p, 0); p_end(&p);
+    CHECK(run(m, &p) == DM_EV_END, "two 128 B loads fill the 256 B pool exactly");
+
+    /* one byte more than the pool: lock-up */
+    p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 1, ccr(1, 3, 16, 1, 3, 1, 0));
+    p_ld(&p, 0); p_ld(&p, 0); p_mov(&p, 1, ccr(1, 0, 1, 1, 3, 1, 0)); p_ld(&p, 0);
+    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 12), "257 B: mfifo_err");
+
+    /* 11 B loaded, 3 B stored: the oldest byte sits at line offset 3, so
+     * 8 + 128 + 128 bytes need ceil((3 + 264) / 8) = 34 lines: lock-up */
+    p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 2, 0x3000);
+    p_mov(&p, 1, ccr(1, 0, 11, 1, 0, 3, 0)); p_ld(&p, 0); p_st(&p, 0);
+    p_mov(&p, 0, 0x2000); p_mov(&p, 1, ccr(1, 3, 16, 1, 3, 1, 0)); p_ld(&p, 0); p_ld(&p, 0);
+    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 12), "line offset 3, 264 B: mfifo_err");
+    CHECK(count(DM_EV_LD) == 2, "the first 128 B load fits (18 lines)");
+
+    /* 3 B loaded and stored: the stream is empty at offset 3. If the store
+     * drains before the next load is accepted the stream restarts at offset 0
+     * (256 B fit in 32 lines), otherwise it continues at 3 (33 lines) */
+    p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 2, 0x3000);
+    p_mov(&p, 1, ccr(1, 0, 3, 1, 0, 3, 0)); p_ld(&p, 0); p_st(&p, 0);
+    p_mov(&p, 0, 0x2000); p_mov(&p, 1, ccr(1, 3, 16, 1, 3, 1, 0)); p_ld(&p, 0); p_ld(&p, 0); p_end(&p);
+    CHECK(run(m, &p) == DM_EV_UNSURE, "lock-up depends on timing");
+    CHECK(count(DM_EV_LD) == 2 && count(DM_EV_ST) == 1, "stops before the uncertain load");
+    dma330_free(m);
+}
+
+/* CR3 / CR4: a non-secure thread may only use non-secure events / peripherals */
+static void test_security(void)
+{
+    dma330_t* m = new_model();
+    prog_t p = {{0}, 0};
+    printf("security: events and peripherals of non-secure threads\n");
+    dma330_security(m, 0x00FFu, 0x3u);
+
+    g_ns = 1;
+    p.n = 0; p_sev(&p, 3); p_flushp(&p, 1); p_end(&p);
+    CHECK(run(m, &p) == DM_EV_END, "NS thread: NS event 3, NS peripheral 1");
+    p.n = 0; p_sev(&p, 9);
+    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 5), "NS thread, DMASEV 9 (secure): ch_evnt_err");
+    p.n = 0; put(&p, 0x36); put(&p, 9 << 3);
+    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 5), "NS thread, DMAWFE 9: ch_evnt_err");
+    p.n = 0; p_wfp(&p, 2, 0);
+    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 6), "NS thread, DMAWFP P2 (secure): ch_periph_err");
+    p.n = 0; p_flushp(&p, 3);
+    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 6), "NS thread, DMAFLUSHP P3: ch_periph_err");
+    p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 1, ccr(1, 3, 1, 1, 3, 1, 0)); p_ldp(&p, 0, 2);
+    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 6), "NS thread, DMALDP P2: ch_periph_err");
+
+    g_ns = 0;
+    p.n = 0; p_sev(&p, 9); p_flushp(&p, 3); p_end(&p);
+    CHECK(run(m, &p) == DM_EV_END, "secure thread: secure event and peripheral");
     dma330_free(m);
 }
 
@@ -518,6 +588,8 @@ int main(void)
     test_loop_conditions();
     test_zero_and_regs();
     test_faults();
+    test_mfifo_lines();
+    test_security();
     test_protocol();
     printf("\n%d checks, %d failed\n", g_checks, g_fail);
     printf(g_fail ? "*** MODEL TEST FAILED ***\n" : "*** MODEL TEST PASSED ***\n");

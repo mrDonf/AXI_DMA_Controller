@@ -17,7 +17,9 @@
 //            +-- debug instruction --> EXEC
 //
 // DMAGO on a channel that is not stopped is ignored by the channel (NOP), as
-// in DMA-330. A non-secure manager cannot start a secure channel (dmago_err).
+// in DMA-330. A non-secure manager cannot start a secure channel (dmago_err),
+// cannot use a secure event in DMASEV / DMAWFE (mgr_evnt_err) and cannot flush
+// a secure peripheral (operand_invalid).
 //==============================================================================
 module dma_manager
   import dma330_pkg::*;
@@ -34,6 +36,10 @@ module dma_manager
   input  logic                    boot_from_pc,
   input  logic [ADDR_W-1:0]       boot_addr,
   input  logic                    boot_manager_ns,
+
+  // Security of each event / peripheral (1: non-secure), CR3 / CR4
+  input  logic [NUM_EVENTS-1:0]   irq_ns,
+  input  logic [NUM_PERIPH-1:0]   periph_ns,
 
   // Instruction cache
   input  logic                    ic_inv_all,
@@ -127,6 +133,10 @@ module dma_manager
   assign cls   = decode_op(op);
 
   logic [31:0] exec_fault;
+  logic [31:0] irq_ns32, periph_ns32;
+
+  assign irq_ns32    = 32'(irq_ns);
+  assign periph_ns32 = 32'(periph_ns);
 
   always_comb begin
     exec_fault = '0;
@@ -136,9 +146,11 @@ module dma_manager
         exec_fault[FTD_DMAGO_ERR]       = mgr_ns && !op[1];   // NS mgr -> secure ch
       end
       I_SEV, I_WFE:
-        exec_fault[FTD_MGR_EVNT_ERR]    = (int'(num5) >= NUM_EVENTS);
+        exec_fault[FTD_MGR_EVNT_ERR]    = (int'(num5) >= NUM_EVENTS) ||
+                                          (mgr_ns && !irq_ns32[num5]);
       I_FLUSHP:
-        exec_fault[FTD_OPERAND_INVALID] = (int'(num5) >= NUM_PERIPH);
+        exec_fault[FTD_OPERAND_INVALID] = (int'(num5) >= NUM_PERIPH) ||
+                                          (mgr_ns && !periph_ns32[num5]);
       I_END, I_KILL, I_NOP: ;
       default:
         exec_fault[FTD_UNDEF_INSTR]     = 1'b1;

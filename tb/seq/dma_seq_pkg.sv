@@ -18,5 +18,7 @@ package dma_seq_pkg;
   `include "dma_kill_vseq.sv"
   `include "dma_corner_vseq.sv"
   `include "dma_robust_vseq.sv"
+  `include "dma_mfifo_vseq.sv"
+  `include "dma_security_vseq.sv"
 
 endpackage : dma_seq_pkg

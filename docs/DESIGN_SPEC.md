@@ -5,10 +5,10 @@
 | Tên IP | `axi_dma330` (top), `dma330_core` (lõi đơn clock) |
 | Tham chiếu | Arm CoreLink DMA-330 (PL330) TRM — tập lệnh, register map, giao thức peripheral |
 | Ngôn ngữ | SystemVerilog-2012 (synthesizable) |
-| Phiên bản tài liệu | 1.1 (thêm: bảo vệ giao thức AXI, endian swap, watchdog, FAR, Q-Channel, PSLVERR) |
+| Phiên bản tài liệu | 1.3 (lõi chạy bằng `aclk`, MFIFO dùng chung cấp phát động, security hai cổng APB + `CR3`/`CR4`). 1.1: bảo vệ giao thức AXI, endian swap, watchdog, FAR, Q-Channel, PSLVERR |
 | Tài liệu liên quan | [VERIFICATION_PLAN.md](VERIFICATION_PLAN.md), [TESTCASES.md](TESTCASES.md), [ARCHITECTURE.md](ARCHITECTURE.md) (tóm tắt tiếng Anh) |
 
-Quy ước: tên tín hiệu, thanh ghi, lệnh giữ nguyên tiếng Anh. `clk` là clock lõi DMA. "Thread" là một luồng thực thi chương trình (manager hoặc channel). Số hex viết `0x...`, số bit viết `[msb:lsb]`.
+Quy ước: tên tín hiệu, thanh ghi, lệnh giữ nguyên tiếng Anh. `aclk` là clock của lõi DMA và cổng AXI (trong `dma330_core` gọi là `clk`). "Thread" là một luồng thực thi chương trình (manager hoặc channel). "S"/"NS" là secure/non-secure. Số hex viết `0x...`, số bit viết `[msb:lsb]`.
 
 ---
 
@@ -39,13 +39,13 @@ Quy ước: tên tín hiệu, thanh ghi, lệnh giữ nguyên tiếng Anh. `clk`
 | Burst | INCR và FIXED, 1–16 beat, beat size từ 1 byte tới độ rộng bus; địa chỉ bắt đầu không cần align; beat hẹp (narrow) |
 | Outstanding | Mỗi kênh tối đa `RD_OUT` burst đọc và `WR_OUT` burst ghi đang chờ phản hồi; AXI ID = số kênh |
 | Thứ tự phản hồi | Hỗ trợ phản hồi out-of-order giữa các ID và R data xen kẽ (interleave) giữa các ID |
-| Bộ đệm dữ liệu | MFIFO riêng cho mỗi kênh, dạng byte-stream: `MFIFO_LINES × DATA_W/8` byte (mặc định 256 B/kênh) |
+| Bộ đệm dữ liệu | Một MFIFO dùng chung cho mọi kênh, `MFIFO_LINES × DATA_W/8` byte (mặc định 128 line = 1 KB), cấp phát động theo line; mỗi kênh thấy một byte-stream riêng, một kênh chạy một mình dùng được toàn bộ |
 | Instruction cache | Dùng chung, fully associative, `IC_LINES` line × `IC_BEATS` beat (mặc định 8 × 32 B) |
 | Peripheral | `NUM_PERIPH` giao diện request/acknowledge kiểu DMA-330 (`drvalid/drtype/drlast`, `davalid/datype`) |
 | Event/IRQ | `NUM_EVENTS` event/interrupt (mặc định 16) + `irq_abort` |
-| Thanh ghi | APB slave 12-bit địa chỉ, register map tương thích DMA-330 |
-| Security | Bit NS cho manager/kênh, kiểm tra `DMAGO` (`dmago_err`), `AxPROT[1]` |
-| Clock domain | 4 loại: core, APB, AXI, mỗi peripheral một clock; CDC bridge chỉ được sinh khi bật tham số tương ứng |
+| Thanh ghi | Hai APB slave 12-bit địa chỉ (secure và non-secure), register map tương thích DMA-330 |
+| Security | Cổng APB secure và non-secure; manager/kênh/event/peripheral có thuộc tính S/NS (`DSR.DNS`, `CSRn.CNS`, `CR3`, `CR4`); thread NS không dùng được event/peripheral secure; cổng NS không thấy và không điều khiển được tài nguyên secure; `AxPROT[1]` |
+| Clock domain | 3 loại: `aclk` (lõi + AXI, như DMA-330), `pclk` (APB), mỗi peripheral một clock; CDC bridge chỉ được sinh khi bật tham số tương ứng |
 | Xử lý lỗi | Phát hiện lỗi lệnh, operand, AXI SLVERR/DECERR, fetch lỗi, MFIFO lock-up; mỗi kênh lỗi bị cách ly |
 | Bảo vệ giao thức AXI | Burst vượt biên 4 KB hoặc endian swap sai bị chặn ngay khi thực thi lệnh (kênh lỗi `ch_rdwr_err`), không bao giờ phát ra bus |
 | Endian swap | `CCR[30:28]`: đảo byte theo nhóm 16/32/64/128 bit trên dữ liệu ghi (tương thích DMA-330) |
@@ -59,16 +59,16 @@ Quy ước: tên tín hiệu, thanh ghi, lệnh giữ nguyên tiếng Anh. `clk`
 
 ```
                      +---------------------------------------------------------------+
-   CPU (APB) ------->|  axi_dma330                                                    |
-                     |   [APB async bridge]--> dma_regs (register map, debug)         |
+   CPU secure (APB)->|  axi_dma330                                    (aclk domain)   |
+   CPU NS     (APB)->|   [APB async bridge x2]--> dma_regs (register map, debug)      |
    irq[], irq_abort<-|                              |                                 |
                      |              manager thread --DMAGO--> channel thread[0..N-1]   |
                      |                    \                /        |                 |
                      |                     +- dma_icache -+         | LD/ST           |
                      |                            |                 v                 |
-                     |                     dma_datapath: rd_engine -> MFIFO -> wr_engine
+                     |                     dma_datapath: rd_engine -> MFIFO (pool) -> wr_engine
                      |                            |                                    |
-                     |                    [AXI async bridge] -------------------------+--> AXI4 interconnect
+                     |                            +-----------------------------------+--> AXI4 interconnect
                      |   dma_periph_ctrl <-[periph sync]-> dr/da  <---------------------+--> Peripheral[0..P-1]
                      +---------------------------------------------------------------+
 ```
@@ -88,21 +88,21 @@ Quy ước: tên tín hiệu, thanh ghi, lệnh giữ nguyên tiếng Anh. `clk`
 | `WQ_DEPTH` | 4 | 1..16 | Độ sâu write queue của mỗi kênh |
 | `RD_OUT` | 4 | 1..8 | Số burst đọc outstanding tối đa của mỗi kênh |
 | `WR_OUT` | 4 | 1..8 | Số burst ghi outstanding tối đa của mỗi kênh (chờ B) |
-| `MFIFO_LINES` | 32 | lũy thừa 2, `NUM_CH*MFIFO_LINES ≤ 1024` | Số line MFIFO của mỗi kênh; dung lượng = `MFIFO_LINES*DATA_W/8` byte |
+| `MFIFO_LINES` | 128 | 32..1024 | Số line của MFIFO **dùng chung** cho mọi kênh; dung lượng = `MFIFO_LINES*DATA_W/8` byte. Tối thiểu 32 line (hai burst dài nhất), tối đa 1024 (trường `CRD[29:20]`); không cần là lũy thừa 2 |
 | `IC_LINES` | 8 | 1..16 | Số line instruction cache |
 | `IC_BEATS` | 4 | lũy thừa 2 | Số beat mỗi line; line = `IC_BEATS*DATA_W/8` byte (phải ≥ 8 và là lũy thừa 2) |
 | `PERIPH_ID` | `0x0000_0330` | 32 bit | Giá trị trả ở `periph_id_0..3`. Đặt `0x0004_1330` nếu cần driver Linux `pl330` nhận ra |
-| `APB_ASYNC` | 0 | 0/1 | 1: `pclk` khác domain với `clk`, sinh `dma_apb_async_bridge` |
-| `AXI_ASYNC` | 0 | 0/1 | 1: `aclk` khác domain với `clk`, sinh `dma_axi_async_bridge` |
+| `APB_ASYNC` | 0 | 0/1 | 1: `pclk` khác domain với `aclk`, sinh một `dma_apb_async_bridge` cho mỗi cổng APB |
 | `PERIPH_ASYNC` | 0 | 0/1 | 1: mỗi peripheral có clock riêng, sinh `dma_periph_sync` |
-| `AFIFO_AW` | 3 | ≥ 2 | Độ sâu mỗi FIFO trong AXI async bridge = `2^AFIFO_AW` |
 | `APB_SLVERR` | 0 | 0/1 | 1: trả `PSLVERR` khi truy cập địa chỉ không được map hoặc ghi vào thanh ghi read-only (truy cập đó không có tác dụng). 0: không bao giờ báo lỗi (giống DMA-330) |
 
-Khi một tham số `*_ASYNC = 0`, clock/reset của domain đó không được dùng; nên nối chúng vào `clk`/`rst_n`.
+Lõi DMA luôn chạy bằng clock AXI (`aclk`), giống DMA-330, nên cổng AXI không cần CDC. Các tham số `AXI_ASYNC`/`AFIFO_AW` và `dma_axi_async_bridge` của phiên bản trước đã bị bỏ. Nếu interconnect chạy clock khác, việc chuyển clock do interconnect đảm nhận.
 
-Các tham số không hợp lệ (ví dụ `NUM_CH > 8`, `MFIFO_LINES` không phải lũy thừa 2, `ID_W` quá nhỏ, `RD_OUT > 8`) dừng elaboration bằng `$fatal` kèm thông báo.
+Khi một tham số `*_ASYNC = 0`, clock/reset của domain đó không được dùng; nên nối chúng vào `aclk`/`aresetn`.
 
-Cấu hình đã được verify bằng regression: giá trị mặc định ở bảng trên, với hai chế độ clock là "sync" (cả 3 tham số `*_ASYNC = 0`, `APB_SLVERR = 0`) và "async" (cả 3 bằng 1, `APB_SLVERR = 1`).
+Các tham số không hợp lệ (ví dụ `NUM_CH > 8`, `MFIFO_LINES` ngoài 32..1024, `ID_W` quá nhỏ, `RD_OUT > 8`) dừng elaboration bằng `$fatal` kèm thông báo.
+
+Cấu hình đã được verify bằng regression: giá trị mặc định ở bảng trên, với hai chế độ clock là "sync" (cả 2 tham số `*_ASYNC = 0`, `APB_SLVERR = 0`) và "async" (cả 2 bằng 1, `APB_SLVERR = 1`).
 
 ---
 
@@ -112,26 +112,30 @@ Cấu hình đã được verify bằng regression: giá trị mặc định ở
 
 | Port | Hướng | Mô tả |
 |---|---|---|
-| `clk`, `rst_n` | in | Clock lõi DMA. Reset tích cực mức thấp, assert bất đồng bộ, deassert được đồng bộ bên trong (`dma_rst_sync`) |
-| `pclk`, `presetn` | in | Clock/reset của APB. Chỉ dùng khi `APB_ASYNC=1` |
-| `aclk`, `aresetn` | in | Clock/reset của AXI. Chỉ dùng khi `AXI_ASYNC=1` |
+| `aclk`, `aresetn` | in | Clock của lõi DMA và cổng AXI4 master. Reset tích cực mức thấp, assert bất đồng bộ, deassert được đồng bộ bên trong (`dma_rst_sync`). Clock controller có thể gate nhánh `aclk` của DMA khi Q-Channel ở `Q_STOPPED` |
+| `pclk`, `presetn` | in | Clock/reset của cả hai cổng APB. Chỉ dùng khi `APB_ASYNC=1` |
 | `periph_clk[P-1:0]`, `periph_rst_n[P-1:0]` | in | Clock/reset của từng peripheral. Chỉ dùng khi `PERIPH_ASYNC=1` |
 
 ### 3.2 Cấu hình boot (tĩnh)
 
-DMA chỉ lấy mẫu các chân này một lần, ở chu kỳ đầu tiên sau khi reset nhả. Chúng phải ổn định trước khi `rst_n` được deassert.
+DMA chỉ lấy mẫu các chân này một lần, ở chu kỳ đầu tiên sau khi reset nhả. Chúng phải ổn định trước khi `aresetn` được deassert.
 
 | Port | Mô tả |
 |---|---|
 | `boot_from_pc` | 1: manager tự chạy chương trình tại `boot_addr` sau reset. 0: manager ở trạng thái Stopped, chờ lệnh debug |
 | `boot_addr[31:0]` | Địa chỉ chương trình boot của manager; đọc lại ở `CR2` |
 | `boot_manager_ns` | Trạng thái security của manager sau reset (1 = non-secure); đọc lại ở `CR0[2]` và `DSR[9]` |
+| `boot_irq_ns[NUM_EVENTS-1:0]` | Bit e = 1: event/interrupt e là non-secure (thread NS và cổng APB NS dùng được); đọc lại ở `CR3` |
+| `boot_periph_ns[NUM_PERIPH-1:0]` | Bit p = 1: peripheral p là non-secure (thread NS dùng được); đọc lại ở `CR4` |
 
-### 3.3 APB4 slave (domain `pclk`)
+### 3.3 Hai APB4 slave (domain `pclk`)
 
-`psel`, `penable`, `pwrite`, `paddr[11:0]`, `pwdata[31:0]` → `pready`, `prdata[31:0]`, `pslverr`.
+* Cổng secure: `psel`, `penable`, `pwrite`, `paddr[11:0]`, `pwdata[31:0]` → `pready`, `prdata[31:0]`, `pslverr`.
+* Cổng non-secure: cùng tập tín hiệu với hậu tố `_ns` (`psel_ns` ... `pslverr_ns`).
 
-* Chế độ sync: zero wait state (`pready = 1`).
+Hai cổng dùng chung một register map; khác nhau ở quyền truy cập (xem 5.13 và 6.5). SoC nối cổng secure vào APB chỉ dành cho master secure, cổng NS vào APB mà master non-secure truy cập được.
+
+* Chế độ sync: zero wait state (`pready = 1`). Nếu hai cổng cùng ở access phase trong một chu kỳ, cổng secure hoàn tất trước, cổng NS chờ thêm 1 chu kỳ (`pready_ns = 0`).
 * Chế độ async: `pready` bị giữ ở 0 cho tới khi transfer hoàn thành ở domain lõi, thường mất vài chu kỳ `pclk`.
 * `pslverr` luôn bằng 0 nếu `APB_SLVERR = 0`. Nếu `APB_SLVERR = 1`, `pslverr = 1` ở chu kỳ hoàn tất của truy cập tới địa chỉ không được map (kể cả thanh ghi của kênh không tồn tại) hoặc lệnh ghi vào thanh ghi read-only; truy cập đó bị bỏ qua.
 * Khi DMA ở trạng thái quiescent (Q-Channel `Q_STOPPED`), `pready` bị giữ ở 0 cho tới khi DMA thoát khỏi trạng thái này.
@@ -169,14 +173,14 @@ Mỗi peripheral `p` có hai kênh valid/ready:
 
 Quy tắc: payload phải giữ nguyên khi `valid=1 && ready=0`, và `valid` không được hạ trước khi có handshake. SVA kiểm tra cả hai phía.
 
-### 3.6 Interrupt (domain `clk`)
+### 3.6 Interrupt (domain `aclk`)
 
 | Port | Mô tả |
 |---|---|
 | `irq[NUM_EVENTS-1:0]` | Interrupt mức cao: `irq[e] = INT_EVENT_RIS[e] & INTEN[e]`. Xóa bằng cách ghi `INTCLR` |
 | `irq_abort` | Mức cao khi manager hoặc bất kỳ kênh nào đang ở trạng thái lỗi (Fault completing / Faulting) |
 
-Hai tín hiệu này ở domain `clk`. Nếu interrupt controller chạy clock khác thì phải đồng bộ phía nhận. Vì là tín hiệu mức nên dùng một bộ 2FF là đủ.
+Hai tín hiệu này ở domain `aclk`. Nếu interrupt controller chạy clock khác thì phải đồng bộ phía nhận. Vì là tín hiệu mức nên dùng một bộ 2FF là đủ.
 
 `irq_abort` cũng bật khi `WDSTAT ≠ 0` (watchdog phát hiện kênh bị treo).
 
@@ -184,12 +188,12 @@ Hai tín hiệu này ở domain `clk`. Nếu interrupt controller chạy clock k
 
 | Port | Hướng | Mô tả |
 |---|---|---|
-| `qreqn` | in | Yêu cầu quiescence từ clock controller (tích cực thấp). Bất đồng bộ, được đồng bộ 2FF vào `clk`. **Phải bằng 1 khi reset**; nối lên 1 nếu không dùng |
-| `qacceptn` | out | 0: DMA chấp nhận, đã quiescent, controller được phép tắt `clk` |
+| `qreqn` | in | Yêu cầu quiescence từ clock controller (tích cực thấp). Bất đồng bộ, được đồng bộ 2FF vào `aclk`. **Phải bằng 1 khi reset**; nối lên 1 nếu không dùng |
+| `qacceptn` | out | 0: DMA chấp nhận, đã quiescent, controller được phép tắt nhánh `aclk` của DMA |
 | `qdeny` | out | 1: DMA từ chối vì đang bận |
-| `qactive` | out | 1: DMA có việc hoặc có truy cập APB đang chờ; controller nên bật lại clock. Là tín hiệu bất đồng bộ (OR giữa trạng thái lõi và `psel`) |
+| `qactive` | out | 1: DMA có việc hoặc có truy cập APB đang chờ; controller nên bật lại clock. Là tín hiệu bất đồng bộ (OR giữa trạng thái lõi, `psel` và `psel_ns`) |
 
-`qacceptn`/`qdeny` ở domain `clk`; controller phải đồng bộ nếu chạy clock khác.
+`qacceptn`/`qdeny` ở domain `aclk`; controller phải đồng bộ nếu chạy clock khác. Chỉ được gate nhánh `aclk` đi vào DMA, không gate `aclk` của interconnect: phía AXI không có giao dịch nào khi DMA ở `Q_STOPPED`.
 
 ---
 
@@ -199,12 +203,11 @@ Hai tín hiệu này ở domain `clk`. Nếu interrupt controller chạy clock k
 
 ```
 axi_dma330                         top, CDC tùy chọn
- ├─ dma_rst_sync (x 3+P)           đồng bộ reset từng domain
- ├─ dma_apb_async_bridge           (APB_ASYNC)   2 x dma_cdc_handshake
- ├─ dma_axi_async_bridge           (AXI_ASYNC)   5 x dma_async_fifo
+ ├─ dma_rst_sync (x 2+P)           đồng bộ reset từng domain
+ ├─ dma_apb_async_bridge [2]       (APB_ASYNC)   secure + NS, mỗi cái 2 x dma_cdc_handshake
  ├─ dma_periph_sync [P]            (PERIPH_ASYNC) 2 x dma_cdc_handshake
- └─ dma330_core                    toàn bộ ở domain clk
-     ├─ dma_regs                   register file APB, giao diện debug
+ └─ dma330_core                    toàn bộ ở domain aclk, nối thẳng ra cổng AXI
+     ├─ dma_regs                   register file hai cổng APB, security, giao diện debug
      ├─ dma_manager                manager thread
      │   └─ dma_fetch_unit
      ├─ dma_channel [NUM_CH]       channel thread
@@ -212,7 +215,7 @@ axi_dma330                         top, CDC tùy chọn
      ├─ dma_icache                 instruction cache dùng chung + dma_rr_arbiter
      ├─ dma_datapath
      │   ├─ dma_rd_engine          RQ, AR arbiter, read tracker, R → MFIFO
-     │   ├─ dma_mfifo [NUM_CH]     byte-stream buffer
+     │   ├─ dma_mfifo              pool dùng chung, danh sách line theo kênh
      │   └─ dma_wr_engine          WQ, chọn burst, AW/W, B tracker
      ├─ dma_event_irq              event flag, interrupt
      ├─ dma_periph_ctrl            request latch, ack queue, flush
@@ -227,43 +230,45 @@ Quy ước index thread trong lõi: kênh `0..NUM_CH-1`, manager là `NUM_CH`.
 ### 4.2 Clock domain và CDC
 
 ```
-          pclk                     clk (core)                          aclk
- APB ->[apb_async_bridge]-> +------------------------------+ ->[axi_async_bridge]-> AXI4
-                            |         dma330_core          |
- periph_clk[p] dr/da <->[periph_sync]                      |
-                            +------------------------------+--> irq[], irq_abort
+          pclk                              aclk
+ APB S  ->[apb_async_bridge]-> +------------------------------+
+ APB NS ->[apb_async_bridge]-> |         dma330_core          |--> AXI4 (cùng aclk, không CDC)
+ periph_clk[p] dr/da <->[periph_sync]                         |
+                               +------------------------------+--> irq[], irq_abort
 ```
+
+Lõi chạy bằng chính clock của cổng AXI, như DMA-330. So với phiên bản trước (lõi `clk` + AXI async bridge tùy chọn), cách này bỏ được 5 async FIFO, 2–3 chu kỳ trễ mỗi chiều trên AR→R và AW/W→B, và một đường CDC băng thông cao.
 
 | Đường qua domain | Cấu trúc | Lý do chọn |
 |---|---|---|
-| APB `pclk → clk` | `dma_apb_async_bridge`: một toggle handshake cho request `{write, addr, wdata}` và một cho response `{slverr, rdata}`. Mỗi lần chỉ có 1 transfer đang chạy; `PREADY = 0` cho tới khi có response | Băng thông thanh ghi thấp; bus nhiều bit được giữ ổn định (quasi-static) khi qua domain |
-| AXI `clk ↔ aclk` | `dma_axi_async_bridge`: 5 FIFO bất đồng bộ dùng con trỏ gray (AW, W, AR theo chiều lõi→bus; B, R theo chiều ngược lại), độ sâu `2^AFIFO_AW` | Đủ băng thông, chạy được ở mọi tỉ lệ clock, giữ thứ tự trên từng kênh AXI |
-| Peripheral `periph_clk[p] ↔ clk` | `dma_periph_sync`: valid/ready dùng toggle handshake mỗi chiều (request 3 bit, ack 2 bit) | Request/ack là sự kiện rời rạc, payload nhỏ |
+| APB `pclk → aclk` (mỗi cổng) | `dma_apb_async_bridge`: một toggle handshake cho request `{write, addr, wdata}` và một cho response `{slverr, rdata}`. Mỗi lần chỉ có 1 transfer đang chạy; `PREADY = 0` cho tới khi có response | Băng thông thanh ghi thấp; bus nhiều bit được giữ ổn định (quasi-static) khi qua domain |
+| Peripheral `periph_clk[p] ↔ aclk` | `dma_periph_sync`: valid/ready dùng toggle handshake mỗi chiều (request 3 bit, ack 2 bit) | Request/ack là sự kiện rời rạc, payload nhỏ |
 | Reset | `dma_rst_sync` cho mỗi domain: assert bất đồng bộ, deassert đồng bộ | |
 
 Quy tắc CDC áp dụng ở mọi nơi:
-1. Chỉ tín hiệu 1 bit hoặc mã gray mới đi qua `dma_sync_2ff`.
+1. Chỉ tín hiệu 1 bit mới đi qua `dma_sync_2ff`.
 2. Bus nhiều bit chỉ đi qua domain khi được handshake giữ ổn định.
 3. Không có logic tổ hợp giữa hai domain.
 
-SVA kiểm tra hai điều: con trỏ gray chỉ đổi tối đa 1 bit mỗi lần (`AFIFO_*GRAY_ONEHOT`), và payload ổn định trong lúc handshake (`CDC_DATA_STABLE`).
+SVA kiểm tra payload ổn định trong lúc handshake (`CDC_DATA_STABLE`).
 
-Độ trễ CDC điển hình:
-* Handshake: ~2 chu kỳ đích + ~2 chu kỳ nguồn cho mỗi transfer.
-* Async FIFO: 2–3 chu kỳ đích từ lúc ghi tới lúc đọc được.
+Độ trễ CDC điển hình: handshake ~2 chu kỳ đích + ~2 chu kỳ nguồn cho mỗi transfer.
 
 ### 4.3 Register file — `dma_regs`
 
-* Decode APB, mux đọc thanh ghi, lưu `INTEN`, `DBGINST0/1`, `WD`.
+* Hai cổng APB (secure, non-secure). Mỗi chu kỳ chỉ phục vụ một truy cập; cổng secure được ưu tiên, cổng NS chờ 1 chu kỳ nếu trùng.
+* Decode APB, mux đọc thanh ghi, lưu `INTEN`, `DBGINST0/1` (một bộ cho mỗi cổng), `WD`.
+* Lấy mẫu `boot_irq_ns`/`boot_periph_ns` một lần sau reset thành `CR3`/`CR4`, và phân phối cho manager, các kênh.
+* Lọc theo security cho truy cập từ cổng NS (bảng 6.5): đọc tài nguyên secure trả 0, ghi bị bỏ qua.
 * Thanh ghi trạng thái (`DSR`, `CSRn`, `CPCn`, `SARn`...) không có flop riêng ở đây; chúng được nối thẳng từ manager/kênh.
-* Phát lệnh debug:
-  * Lệnh cho **manager** được chốt vào `dbg_mgr_busy` (đọc ở `DBGSTATUS[0]`) cho tới khi manager báo xong.
-  * Lệnh cho **channel** có hiệu lực ngay trong chu kỳ ghi `DBGCMD`:
+* Phát lệnh debug (từ bộ `DBGINST0/1` của cổng ghi `DBGCMD`):
+  * Lệnh cho **manager** được chốt vào `dbg_mgr_busy` (đọc ở `DBGSTATUS[0]`) cho tới khi manager báo xong. Lệnh từ cổng NS bị bỏ qua nếu manager secure.
+  * Lệnh cho **channel** có hiệu lực ngay trong chu kỳ ghi `DBGCMD`. Lệnh từ cổng NS bị bỏ qua nếu kênh secure (`CSRn.CNS = 0`):
     * `DMAKILL` → kill kênh;
-    * `DMASEV` với số event hợp lệ → set event;
+    * `DMASEV` với số event hợp lệ → set event; nếu kênh NS mà event secure → kênh lỗi `ch_evnt_err` + `dbg_instr`;
     * mọi lệnh khác, hoặc `DMASEV` có số event sai → kênh bị lỗi `FTC_DBG_INSTR` + `FTC_UNDEF_INSTR`;
     * nếu số kênh ≥ `NUM_CH`, lệnh bị bỏ qua.
-* Mọi lệnh ghi `DBGCMD` đều bị bỏ qua khi `DBGSTATUS[0] = 1`, kể cả lệnh dành cho channel.
+* Mọi lệnh ghi `DBGCMD` đều bị bỏ qua khi `DBGSTATUS[0] = 1`, kể cả lệnh dành cho channel. `DBGSTATUS` dùng chung cho hai cổng.
 
 ### 4.4 Manager thread — `dma_manager`
 
@@ -282,7 +287,8 @@ SVA kiểm tra hai điều: con trỏ gray chỉ đổi tối đa 1 bit mỗi l�
 * Lệnh debug chỉ được nhận khi manager ở `M_STOPPED` (thực thi) hoặc `M_FAULTING` (chỉ `DMAKILL` có tác dụng, lệnh khác bị bỏ qua nhưng vẫn được báo xong). Khi manager đang chạy chương trình boot, lệnh debug phải chờ và `DBGSTATUS` = busy.
 * Kiểm tra khi thực thi `DMAGO`:
   * số kênh ≥ `NUM_CH` → `operand_invalid`;
-  * manager non-secure mà `DMAGO` yêu cầu kênh secure (`ns=0`) → `dmago_err`.
+  * manager non-secure mà `DMAGO` yêu cầu kênh secure (`ns=0`) → `dmago_err`. Quy tắc này theo security của manager, không theo cổng gửi lệnh debug.
+* Manager non-secure: `DMASEV`/`DMAWFE` với event secure (`CR3[e] = 0`) → `mgr_evnt_err`; `DMAFLUSHP` với peripheral secure (`CR4[p] = 0`) → `operand_invalid`.
 * `DMAGO` hợp lệ làm hai việc: phát `go_valid` tới kênh, và **invalidate toàn bộ instruction cache cùng line buffer của mọi thread**. Nhờ vậy kênh không bao giờ chạy code cũ.
 * Nếu kênh không ở trạng thái Stopped, `DMAGO` bị kênh bỏ qua (như DMA-330).
 
@@ -306,13 +312,14 @@ Trạng thái kiến trúc của mỗi kênh: `PC (CPC)`, `SAR`, `DAR`, `CCR`, `
 * **LD/ST được issue, không thực thi tại chỗ.**
   * `DMALD`: đẩy một mô tả burst (`xfer_t`) vào RQ của kênh, tăng `SAR` (nếu INCR) theo số byte của burst, rồi đi tiếp sang lệnh sau.
   * `DMAST`: đẩy vào WQ, tăng `DAR`.
-  * Thread chỉ dừng ở những chỗ ISA yêu cầu: barrier, `DMAEND`, `DMAWFE`, `DMAWFP`. Ngoài ra thread dừng khi queue đầy, hoặc khi `DMALD` chưa có chỗ trong MFIFO.
+  * Thread chỉ dừng ở những chỗ ISA yêu cầu: barrier, `DMAEND`, `DMAWFE`, `DMAWFP`. Ngoài ra thread dừng khi queue đầy, hoặc khi `DMALD` chưa có chỗ trong MFIFO dùng chung.
+* **Security** (kênh NS, tức `DMAGO` với `ns = 1`): `DMASEV`/`DMAWFE` với event secure (`CR3[e] = 0`) → `ch_evnt_err`; `DMAWFP`/`DMAFLUSHP`/`DMALDP`/`DMASTP` với peripheral secure (`CR4[p] = 0`) → `ch_periph_err`. Kênh secure dùng được mọi event/peripheral.
 * Lệnh có điều kiện `S`/`B`: so sánh với cờ `request_type`. Nếu điều kiện sai, lệnh tương đương `DMANOP`.
 * Vòng lặp:
   * `DMALP` nạp `LCx = iter-1`.
   * `DMALPEND` giảm `LCx` và nhảy lùi `jump` byte nếu `LCx ≠ 0`.
   * `DMALPFE` nhảy lùi cho tới khi peripheral báo `drlast`.
-* Mỗi lệnh mất khoảng 3 chu kỳ `clk` khi trúng line buffer (FETCH → insn valid → EXEC).
+* Mỗi lệnh mất khoảng 3 chu kỳ `aclk` khi trúng line buffer (FETCH → insn valid → EXEC).
 * **Bảo vệ giao thức AXI**: khi thực thi `DMALD`/`DMAST`, kênh kiểm tra burst sắp phát. Burst bị từ chối và kênh lỗi `ch_rdwr_err` (FTR[7]) nếu:
   * burst size lớn hơn độ rộng bus;
   * burst INCR vượt biên 4 KB (tính từ địa chỉ bắt đầu đã align theo beat size);
@@ -328,7 +335,7 @@ Trạng thái kiến trúc của mỗi kênh: `PC (CPC)`, `SAR`, `DAR`, `CCR`, `
 * Ở các trạng thái `STOPPED/KILLING/FAULT_*`, kênh bật `dp_flush`. Khi đó datapath:
   * bỏ các request còn trong RQ/WQ;
   * bỏ R data trả về cho kênh này;
-  * xóa MFIFO của kênh, trừ khi đang có burst của kênh trên W;
+  * xóa dữ liệu của kênh trong MFIFO và trả mọi line của kênh về pool, trừ khi đang có burst của kênh trên W;
   * vẫn chờ mọi burst đang outstanding hoàn tất phản hồi.
 
 ### 4.6 Instruction fetch — `dma_fetch_unit` + `dma_icache`
@@ -352,11 +359,11 @@ Trạng thái kiến trúc của mỗi kênh: `PC (CPC)`, `SAR`, `DAR`, `CCR`, `
 
 ```
            +--------------------------- dma_datapath -----------------------------+
- DMALD --->| admission (reserved) -> RQ[ch] -> AR arbiter -> AR reg ----------------|--> AR
+ DMALD --->| admission (đặt chỗ line) -> RQ[ch] -> AR arbiter -> AR reg ------------|--> AR
            |                                      ^ i-cache refill (ưu tiên)       |
            |                          read tracker[ch] <- R (theo RID) <-----------|--- R
            |                                 | lane extract                        |
-           |                            MFIFO[ch] (byte stream)                    |
+           |              MFIFO: pool MFIFO_LINES line, danh sách line theo kênh   |
            |                                 | pop + rotate                        |
  DMAST --->| admission (unclaimed) -> WQ[ch] -> chọn burst đã đủ data -> AW + W ---|--> AW, W
            |                          B tracker[ch] <- B (theo BID) <--------------|--- B
@@ -378,24 +385,45 @@ Trạng thái kiến trúc của mỗi kênh: `PC (CPC)`, `SAR`, `DAR`, `CCR`, `
 * `RRESP[1] = 1` (SLVERR/DECERR) → `rd_err` của kênh.
 * R không bao giờ bị chặn vì thiếu chỗ trong MFIFO, vì chỗ đã được dành trước khi issue. R chỉ bị chặn khi cần đẩy ack `DMALDP` mà ack queue của peripheral đã đầy.
 
-#### 4.7.2 MFIFO — `dma_mfifo`
+#### 4.7.2 MFIFO — `dma_mfifo` (pool dùng chung)
 
-* Gồm `DATA_W/8` bank rộng 1 byte × `MFIFO_LINES` hàng. Byte thứ p của stream nằm ở bank `p % NB`, hàng `(p / NB) % LINES`.
-* Mỗi chu kỳ push tối đa NB byte và pop tối đa NB byte, ở mọi offset.
+* Một pool `MFIFO_LINES` line, mỗi line `NB = DATA_W/8` byte (`NB` bank rộng 1 byte × `MFIFO_LINES` hàng). Mọi kênh lấy line từ pool này khi cần; không có phần chia tĩnh cho từng kênh.
+* Mỗi kênh vẫn thấy một **byte stream** riêng. Byte thứ p của stream nằm ở bank `p % NB` của line thứ `p / NB` trong danh sách line của kênh.
+* Danh sách line là danh sách liên kết qua pool:
+  * `hd[c]`: line chứa byte sẽ pop tiếp theo; `tl[c]`: line chứa byte push sau cùng;
+  * `nxt[l]`: line đứng sau line `l`; `own[l]`: line `l` đang được dùng.
+* **Push** (từ R, tối đa NB byte/chu kỳ): nếu offset ghi bằng 0 (line cuối đã đầy) hoặc dữ liệu tràn qua cuối line cuối, MFIFO lấy line trống có index nhỏ nhất và nối vào cuối danh sách. Một push không bao giờ cần quá một line mới.
+* **Pop** (ra W, tối đa NB byte/chu kỳ): đọc line `hd` và line sau nó, xoay để byte kế tiếp nằm ở byte 0. Pop lấy byte cuối của line `hd` thì trả line đó về pool (`pop_frees`).
+* **Flush** kênh: mọi line của kênh về pool trong một chu kỳ (nhờ `own_ch[l]`), offset của kênh về 0.
+* Mỗi chu kỳ có một push và một pop, cho kênh bất kỳ.
 * Vì dữ liệu lưu theo **thứ tự stream** chứ không theo byte lane, phía nguồn và phía đích có thể khác nhau hoàn toàn về size, length và alignment.
+* Pool không bao giờ từ chối push: admission control đã đặt chỗ đủ line trước khi phát AR. SVA kiểm tra điều này (`MFIFO_ALLOC_HAS_LINE`).
 
 #### 4.7.3 Kiểm soát nhận lệnh (admission control)
 
-Hai bộ đếm byte cho mỗi kênh:
+Bộ đếm cho mỗi kênh:
 
 | Bộ đếm | Tăng khi | Giảm khi | Dùng để |
 |---|---|---|---|
-| `reserved` | `DMALD` được nhận (+bytes) | byte được pop ra W | Chỉ nhận `DMALD` khi `reserved + bytes ≤ dung lượng MFIFO` → R không bao giờ stall vì thiếu chỗ |
-| `unclaimed` | `DMALD` được nhận (+bytes) | `DMAST` được nhận (−bytes) | Phát hiện `DMAST` cần nhiều byte hơn số sẽ có |
+| `held` (line) | `DMALD` được nhận (+`need`) | pop trả một line về pool | Chỉ nhận `DMALD` khi `Σ held + need ≤ MFIFO_LINES` → R không bao giờ stall vì thiếu chỗ |
+| `res_off` | `DMALD` được nhận (+bytes, mod NB) | — | Offset trong line của byte được đặt chỗ kế tiếp |
+| `reserved` (byte) | `DMALD` được nhận (+bytes) | byte được pop ra W | Biết khi nào stream rỗng |
+| `unclaimed` (byte) | `DMALD` được nhận (+bytes) | `DMAST` được nhận (−bytes) | Phát hiện `DMAST` cần nhiều byte hơn số sẽ có |
 
-Hai lỗi tương ứng:
-* `DMALD` không vừa MFIFO **và** kênh không còn store nào đang chờ (tức không gì có thể giải phóng chỗ) → lỗi `mfifo_err` (phát hiện lock-up).
+* Số line một `DMALD` cần thêm: `need = ceil((res_off + bytes) / NB) − (res_off ≠ 0)` (line đang dùng dở được dùng tiếp). Tối đa 17 line.
+* Mỗi chu kỳ nhận tối đa một `DMALD`, round-robin giữa các kênh có `DMALD` vừa pool.
+* Khi stream của kênh rỗng hẳn (`reserved = 0`), kênh trả line dùng dở cuối cùng về pool và bắt đầu lại ở offset 0. Kênh rảnh không giữ line nào.
+* Một `DMALD` không vừa pool chỉ vì kênh khác đang giữ line thì **chờ**, không lỗi.
+
+Các lỗi:
+* `DMALD` không vừa pool, kênh không còn store nào đang chờ (kênh "stuck"), và:
+  * **self lock-up**: `held + need > MFIFO_LINES`, tức không vừa ngay cả khi pool chỉ có riêng kênh này; hoặc
+  * **deadlock**: mọi kênh đang giữ line đều stuck, nên không line nào có thể được giải phóng. Mọi kênh stuck đang giữ line bị lỗi; line của chúng về pool.
+
+  → lỗi `mfifo_err`. Lock-up chỉ được xét khi lệnh `DMALD` không có lỗi khác.
 * `DMAST`/`DMASTP` (không phải `DMASTZ`) có `bytes > unclaimed` → lỗi `st_data_unavailable`.
+
+Hệ quả của việc dùng chung: một kênh chiếm gần hết pool làm các kênh khác phải chờ, và hai kênh cùng giữ line mà không store có thể deadlock nhau (cả hai bị `mfifo_err`). Với cấp phát tĩnh, các kênh cách ly hoàn toàn nhưng mỗi kênh chỉ dùng được `1/NUM_CH` dung lượng. Chương trình nên store dữ liệu đã load trước khi load tiếp quá nhiều; nếu mỗi kênh giữ không quá `MFIFO_LINES/NUM_CH` line thì không bao giờ phải chờ hay deadlock.
 
 #### 4.7.4 Write engine — `dma_wr_engine`
 
@@ -458,7 +486,7 @@ Với mỗi peripheral `p`:
   * status đổi;
   * một handshake AXI mang ID của kênh (AR, R, AW, W, B);
   * instruction cache trả line cho kênh.
-* **Bộ đếm**: một prescaler chung tạo tick mỗi 256 chu kỳ `clk`. Mỗi kênh có bộ đếm 16 bit, tăng theo tick khi active mà không có progress, và về 0 khi có progress.
+* **Bộ đếm**: một prescaler chung tạo tick mỗi 256 chu kỳ `aclk`. Mỗi kênh có bộ đếm 16 bit, tăng theo tick khi active mà không có progress, và về 0 khi có progress.
 * **Khi đạt `WD.timeout`**: bộ đếm dừng ở giá trị timeout và kênh bị báo **một lần**. Muốn báo lại thì kênh phải có progress hoặc trở thành inactive trước. Kênh được báo ngay cả khi progress quay lại đúng ở chu kỳ đó, vì nó đã thực sự đứng yên suốt khoảng timeout.
   * `WDSTAT[ch]` được set (sticky, ghi 1 để xóa) và `irq_abort` bật.
   * Nếu `WD.irq_only = 0`: kênh lỗi `lockup_err` (FTR[31]) và vào `Fault completing`.
@@ -479,21 +507,21 @@ Với mỗi peripheral `p`:
   * I-cache không lookup/refill;
   * ack queue của mọi peripheral rỗng;
   * không có lệnh debug đang chờ;
-  * không có truy cập APB.
+  * không có truy cập APB trên cổng nào.
 
   Kênh đang chờ event/peripheral **không** được xem là idle, vì chương trình vẫn đang chạy.
-* **Ở `Q_STOPPED`**, lõi không nhận việc mới: APB bị giữ `PREADY = 0`, request của peripheral bị giữ `DRREADY = 0`. Controller có thể tắt `clk`. `qactive` bật khi có truy cập APB, để controller bật lại clock và kéo `qreqn` lên.
+* **Ở `Q_STOPPED`**, lõi không nhận việc mới: cả hai cổng APB bị giữ `PREADY = 0`, request của peripheral bị giữ `DRREADY = 0`. Controller có thể tắt nhánh `aclk` của DMA. `qactive` bật khi có truy cập APB, để controller bật lại clock và kéo `qreqn` lên.
 * **Reset**: vào `Q_RUN`.
 
 ### 4.12 Tổng hợp tài nguyên lưu trữ (mặc định)
 
 | Khối | Dung lượng |
 |---|---|
-| MFIFO | 4 kênh × 256 B = 1 KB |
+| MFIFO | 128 line × 8 B = 1 KB dùng chung, + quản lý line: `nxt` 128 × 7 bit, `own`/`own_ch` 128 × 3 bit, `hd`/`tl`/offset/đếm mỗi kênh |
 | I-cache | 8 × 32 B = 256 B + tag |
 | Line buffer | 5 thread × 32 B |
 | RQ/WQ/tracker | 4 kênh × (4 + 4 + 4 + 4) mô tả burst (~60 bit/mục) |
-| AXI async bridge | 5 FIFO × 8 mục (W: 64+8+1 bit, R: 64+4+2+1 bit) |
+| `DBGINST0/1` | 2 bộ (một cho mỗi cổng APB) |
 
 ---
 
@@ -501,10 +529,10 @@ Với mỗi peripheral `p`:
 
 ### 5.1 Reset và khởi động
 
-1. Mọi reset (`rst_n`, `presetn`, `aresetn`, `periph_rst_n`) nên được assert **cùng lúc**. Lý do: CDC bridge có state ở cả hai domain; nếu chỉ reset một phía, các toggle/con trỏ ở hai phía sẽ lệch nhau.
+1. Mọi reset (`aresetn`, `presetn`, `periph_rst_n`) nên được assert **cùng lúc**. Lý do: CDC bridge có state ở cả hai domain; nếu chỉ reset một phía, các toggle ở hai phía sẽ lệch nhau.
 2. Mỗi reset được đồng bộ trong domain của nó. Sau khi tất cả được deassert:
-   * các thread và datapath về trạng thái ban đầu: mọi kênh `Stopped`, MFIFO rỗng, cache invalid, `INTEN = 0`, mọi flag event bằng 0;
-   * manager ở `M_BOOT` một chu kỳ, lấy mẫu chân boot.
+   * các thread và datapath về trạng thái ban đầu: mọi kênh `Stopped` và secure (`CNS = 0`), mọi line MFIFO trống, cache invalid, `INTEN = 0`, mọi flag event bằng 0;
+   * manager ở `M_BOOT` một chu kỳ, lấy mẫu chân boot; register file lấy mẫu `boot_irq_ns`/`boot_periph_ns` vào `CR3`/`CR4` trong cùng chu kỳ.
 3. Nếu `boot_from_pc = 1`: manager fetch lệnh tại `boot_addr` và chạy chương trình boot, thường gồm `DMAGO` các kênh, `DMAWFE`/`DMASEV` để đồng bộ, rồi kết thúc bằng `DMAEND`. Nếu fetch lỗi, manager vào `Faulting` (`FTRD[16]`) và `irq_abort` bật.
 4. Nếu `boot_from_pc = 0`: manager `Stopped`, chờ phần mềm gửi lệnh qua debug.
 
@@ -534,15 +562,15 @@ Với mỗi peripheral `p`:
 Ví dụ: chương trình `DMAMOV SAR/DAR/CCR; DMALP 8 { DMALD; DMAST }; DMAWMB; DMASEV 0; DMAEND`.
 
 ```
- channel      datapath (RQ/AR)        AXI slave        MFIFO[ch]       datapath (WQ/W)      AXI slave
- DMALD #1 --> reserve 128B, RQ <-- AR(id=ch) -------->|
+ channel      datapath (RQ/AR)        AXI slave        MFIFO (pool)    datapath (WQ/W)      AXI slave
+ DMALD #1 --> đặt chỗ 16 line, RQ <-- AR(id=ch) ----->|
  DMAST #1 --> WQ (unclaimed -128)                      |
- DMALD #2 --> reserve? 256<=256 ok --> AR ------------>|
+ DMALD #2 --> Σheld+16 <= 128? ok --> AR ------------->|
  DMAST #2 --> WQ                                       |
- DMALD #3 --> (chờ: MFIFO đã được hứa hết) ...         |
-                                   R beat x16 <--------| push 8B/beat -> count=128
+ DMALD #3 --> (chờ nếu pool đã được đặt hết) ...       |
+                                   R beat x16 <--------| push 8B/beat, lấy line mới -> count=128
                                                                     WQ head đủ 128B -> AW + W x16 --->
-                                                                    pop 8B/beat -> reserved -=
+                                                                    pop 8B/beat, trả line -> held -=
  DMALD #3 được nhận ...                                                                 B(id=ch) <---
  DMAWMB: chờ wr_busy=0 (mọi B đã về)
  DMASEV 0 -> INT_EVENT_RIS[0]=1 -> irq[0] (nếu INTEN[0]=1)
@@ -611,7 +639,7 @@ Ví dụ memory → peripheral FIFO, mỗi request là một burst:
  irq_abort = 1, FSRC[n] = 1  ...  CPU: đọc FTRn/CPCn --> DMAKILL (debug) --> C_KILLING --> C_STOPPED, FTR=0
 ```
 
-* Kênh lỗi bị cách ly: các kênh khác vẫn chạy bình thường. Tài nguyên dùng chung (AR, W, cache) không bị kẹt, vì burst đang bay vẫn được hoàn tất.
+* Kênh lỗi bị cách ly: các kênh khác vẫn chạy bình thường. Tài nguyên dùng chung (AR, W, cache, MFIFO) không bị kẹt, vì burst đang bay vẫn được hoàn tất và line MFIFO của kênh lỗi được trả về pool khi kênh flush. Ngoại lệ: trong lúc một kênh chiếm gần hết MFIFO, `DMALD` của kênh khác phải chờ (4.7.3).
 * `CPCn` giữ địa chỉ lệnh gây lỗi (với lỗi phát hiện lúc execute hoặc fetch).
 * Lỗi đến từ AXI (`RRESP`/`BRESP`) là bất đồng bộ: `CPC` lúc đó trỏ tới lệnh đang thực thi chứ không phải lệnh `DMALD`/`DMAST` đã gây lỗi.
 * Manager lỗi → `M_FAULTING`, `FSRD = 1`, `irq_abort = 1`. Chỉ `DMAKILL` gửi qua debug mới đưa manager về `Stopped` và xóa `FTRD`.
@@ -623,10 +651,10 @@ Ví dụ memory → peripheral FIFO, mỗi request là một burst:
 |---|---|---|
 | 0 | `undef_instr` | Opcode không hợp lệ; `DMAGO` trong chương trình kênh; lệnh debug không hợp lệ cho kênh |
 | 1 | `operand_invalid` | `DMAMOV` với thanh ghi đích > 2 |
-| 5 | `ch_evnt_err` | `DMASEV`/`DMAWFE` có số event ≥ `NUM_EVENTS` |
-| 6 | `ch_periph_err` | `DMAWFP`/`DMAFLUSHP`/`DMALDP`/`DMASTP` có số peripheral ≥ `NUM_PERIPH` |
+| 5 | `ch_evnt_err` | `DMASEV`/`DMAWFE` có số event ≥ `NUM_EVENTS`, hoặc kênh NS dùng event secure (kể cả `DMASEV` gửi qua debug) |
+| 6 | `ch_periph_err` | `DMAWFP`/`DMAFLUSHP`/`DMALDP`/`DMASTP` có số peripheral ≥ `NUM_PERIPH`, hoặc kênh NS dùng peripheral secure |
 | 7 | `ch_rdwr_err` | Khi thực thi `DMALD`/`DMAST`: burst size lớn hơn độ rộng bus; burst INCR vượt biên 4 KB; endian swap không hợp lệ (store) |
-| 12 | `mfifo_err` | `DMALD` không vừa MFIFO và không có store nào đang chờ (lock-up) |
+| 12 | `mfifo_err` | `DMALD` không vừa MFIFO, kênh không có store nào đang chờ, và: không vừa ngay cả khi pool trống (self lock-up), hoặc mọi kênh đang giữ line đều kẹt như vậy (deadlock) |
 | 13 | `st_data_unavailable` | `DMAST` cần nhiều byte hơn số byte đã load mà chưa store |
 | 16 | `instr_fetch_err` | AXI trả lỗi khi refill line chứa lệnh |
 | 17 | `data_write_err` | `BRESP` = SLVERR/DECERR |
@@ -637,8 +665,8 @@ Ví dụ memory → peripheral FIFO, mỗi request là một burst:
 | Bit FTRD | Tên | Điều kiện |
 |---|---|---|
 | 0 | `undef_instr` | Opcode không phải lệnh manager; lệnh debug không thuộc {GO, SEV, KILL, NOP} |
-| 1 | `operand_invalid` | `DMAGO` tới kênh ≥ `NUM_CH`; `DMAFLUSHP` có số peripheral sai |
-| 4 | `mgr_evnt_err` | `DMASEV`/`DMAWFE` có số event sai |
+| 1 | `operand_invalid` | `DMAGO` tới kênh ≥ `NUM_CH`; `DMAFLUSHP` có số peripheral sai, hoặc manager NS flush peripheral secure |
+| 4 | `mgr_evnt_err` | `DMASEV`/`DMAWFE` có số event sai, hoặc manager NS dùng event secure |
 | 5 | `dmago_err` | Manager non-secure gửi `DMAGO` cho kênh secure |
 | 16 | `instr_fetch_err` | Lỗi AXI khi fetch chương trình manager |
 | 30 | `dbg_instr` | Lỗi do lệnh debug |
@@ -664,7 +692,7 @@ Ví dụ memory → peripheral FIFO, mỗi request là một burst:
 
 1. Clock controller kéo `qreqn = 0`.
 2. DMA trả lời:
-   * nếu idle: `qacceptn = 0`, controller tắt `clk`;
+   * nếu idle: `qacceptn = 0`, controller tắt nhánh `aclk` của DMA;
    * nếu bận: `qdeny = 1`; controller phải kéo `qreqn = 1` để quay về `Q_RUN` rồi thử lại sau.
 3. Nếu CPU truy cập APB trong lúc clock tắt:
    * `qactive = 1`, `PREADY` vẫn bằng 0;
@@ -674,17 +702,34 @@ Ví dụ memory → peripheral FIFO, mỗi request là một burst:
 
 ### 5.13 Security
 
-* Manager có bit NS, khởi tạo từ chân `boot_manager_ns`.
-* `DMAGO` mang cờ `ns` (opcode `0xA2`); cờ này trở thành NS của kênh (`CSRn[21]`).
-* Manager non-secure không được khởi động kênh secure (`dmago_err`).
-* Kênh NS phát `AxPROT[1] = 1` trên mọi giao dịch, kể cả instruction fetch.
-* Thiết kế chỉ có một cổng APB: không có cổng APB non-secure riêng như DMA-330.
+Tài nguyên có thuộc tính secure (S) / non-secure (NS):
+
+| Tài nguyên | Thuộc tính | Đặt bởi | Đọc ở |
+|---|---|---|---|
+| Manager | NS khi `boot_manager_ns = 1` | Chân boot, lấy mẫu sau reset | `DSR[9]`, `CR0[2]` |
+| Kênh n | NS khi được khởi động bằng `DMAGO` có `ns = 1` (opcode `0xA2`). Sau reset là secure | Lệnh `DMAGO` | `CSRn[21]` |
+| Event/interrupt e | NS khi `boot_irq_ns[e] = 1` | Chân boot, lấy mẫu sau reset | `CR3[e]` |
+| Peripheral p | NS khi `boot_periph_ns[p] = 1` | Chân boot, lấy mẫu sau reset | `CR4[p]` |
+
+Quy tắc cho thread:
+* Manager NS không được khởi động kênh secure (`dmago_err`), không dùng được event secure (`mgr_evnt_err`) và không flush được peripheral secure (`operand_invalid`).
+* Kênh NS không dùng được event secure (`ch_evnt_err`) và peripheral secure (`ch_periph_err`), xem 4.5.
+* Thread secure dùng được mọi tài nguyên.
+* Kênh NS phát `AxPROT[1] = 1` trên mọi giao dịch, kể cả instruction fetch; manager NS fetch với `ARPROT[1] = 1`.
+
+Quy tắc cho hai cổng APB:
+* Cổng secure thấy và điều khiển mọi thứ.
+* Cổng NS chỉ thấy và điều khiển tài nguyên NS (bảng 6.5). Thanh ghi hoặc bit của tài nguyên secure đọc về 0, lệnh ghi vào đó bị bỏ qua, không báo `PSLVERR`.
+* Mỗi cổng có bộ `DBGINST0/1` riêng, nên một bên không thể sửa lệnh debug mà bên kia sắp phát. Lệnh debug từ cổng NS tới thread secure bị bỏ qua.
+* Phần mềm secure nên dùng `CR3`/`CR4` để biết event/peripheral nào thuộc thế giới nào, và chỉ cấp cho driver NS các event, peripheral và kênh NS.
+
+Hệ quả: khi manager là secure (`boot_manager_ns = 0`), chỉ phần mềm secure khởi động được kênh (nhưng có thể khởi động kênh NS cho thế giới NS dùng). Khi manager là NS, phần mềm NS tự khởi động kênh NS qua cổng NS; không ai khởi động được kênh secure.
 
 ---
 
 ## 6. Programmer's model: register map
 
-Tất cả thanh ghi rộng 32 bit, địa chỉ là offset trong vùng APB 4 KB. RO = read-only, WO = write-only, RW = read/write. "n" là số kênh.
+Tất cả thanh ghi rộng 32 bit, địa chỉ là offset trong vùng APB 4 KB. Hai cổng APB dùng chung bản đồ này; cổng NS bị lọc theo 6.5. RO = read-only, WO = write-only, RW = read/write. "n" là số kênh.
 
 ### 6.1 Bảng tổng hợp
 
@@ -710,15 +755,15 @@ Tất cả thanh ghi rộng 32 bit, địa chỉ là offset trong vùng APB 4 KB
 | 0x410 + 0x20n | `LC1_n` | RO | 0 | Loop counter 1 (8 bit) |
 | 0xD00 | `DBGSTATUS` | RO | 0 | [0] 1 = đang thực thi lệnh debug của manager |
 | 0xD04 | `DBGCMD` | WO | – | Ghi `[1:0] = 00` để thực thi `DBGINST0/1`; giá trị khác bị bỏ qua |
-| 0xD08 | `DBGINST0` | RW | 0 | Xem 6.4 (các bit reserved đọc về 0) |
-| 0xD0C | `DBGINST1` | RW | 0 | Byte 2..5 của lệnh |
+| 0xD08 | `DBGINST0` | RW | 0 | Xem 6.4 (các bit reserved đọc về 0). Mỗi cổng APB một bản riêng |
+| 0xD0C | `DBGINST1` | RW | 0 | Byte 2..5 của lệnh. Mỗi cổng APB một bản riêng |
 | 0xE00 | `CR0` | RO | theo tham số | Cấu hình |
 | 0xE04 | `CR1` | RO | theo tham số | Cấu hình I-cache |
 | 0xE08 | `CR2` | RO | `boot_addr` | Địa chỉ boot |
-| 0xE0C | `CR3` | RO | 0 | (không dùng) |
-| 0xE10 | `CR4` | RO | 0 | (không dùng) |
+| 0xE0C | `CR3` | RO | `boot_irq_ns` | `[e]` 1: event/interrupt e là non-secure |
+| 0xE10 | `CR4` | RO | `boot_periph_ns` | `[p]` 1: peripheral p là non-secure |
 | 0xE14 | `CRD` | RO | theo tham số | Cấu hình datapath |
-| 0xE80 | `WD` | RW | 0 | Watchdog: `[0] irq_only`, `[31:16] timeout` (×256 clk, 0 = tắt); bit khác reserved |
+| 0xE80 | `WD` | RW | 0 | Watchdog: `[0] irq_only`, `[31:16] timeout` (×256 chu kỳ `aclk`, 0 = tắt); bit khác reserved. Chỉ cổng secure |
 | 0xE84 | `WDSTAT` | W1C | 0 | `[n]` kênh n bị watchdog phát hiện treo; ghi 1 để xóa (mở rộng) |
 | 0xFE0..0xFEC | `periph_id_0..3` | RO | `PERIPH_ID` | Mỗi word chứa 1 byte (byte k ở `[7:0]`) |
 | 0xFF0..0xFFC | `pcell_id_0..3` | RO | 0x0D, 0xF0, 0x05, 0xB1 | PrimeCell ID = `0xB105F00D` |
@@ -781,7 +826,9 @@ Mã 3 (Updating PC) có trong DMA-330 nhưng không bao giờ xuất hiện ở 
 | | [11:8] | `WQ_DEPTH − 1` |
 | | [14:12] | `RD_OUT − 1` |
 | | [19:16] | `RQ_DEPTH − 1` |
-| | [29:20] | `NUM_CH*MFIFO_LINES − 1` (tổng số line MFIFO) |
+| | [29:20] | `MFIFO_LINES − 1` (số line của MFIFO dùng chung, 127) |
+| `CR3` | [NUM_EVENTS-1:0] | `boot_irq_ns` lấy mẫu sau reset |
+| `CR4` | [NUM_PERIPH-1:0] | `boot_periph_ns` lấy mẫu sau reset |
 
 Giá trị mặc định: `CR0 = 0x001E_3031` khi `boot_from_pc = 0` và `boot_manager_ns = 0`; `CR1 = 0x0000_0075`; `CRD = 0x07F3_3333`.
 
@@ -808,8 +855,28 @@ Lệnh debug được phép:
 | Manager | `DMANOP` | Không làm gì |
 | Manager | Lệnh khác | Manager lỗi (`undef_instr` + `dbg_instr`) |
 | Channel | `DMAKILL` | Kill kênh |
-| Channel | `DMASEV` | Set event (số event sai → kênh lỗi) |
+| Channel | `DMASEV` | Set event (số event sai → kênh lỗi; kênh NS với event secure → kênh lỗi `ch_evnt_err` + `dbg_instr`) |
 | Channel | Lệnh khác | Kênh lỗi (`undef_instr` + `dbg_instr`) |
+
+Lệnh được lấy từ `DBGINST0/1` của chính cổng ghi `DBGCMD`. Từ cổng NS, lệnh cho manager secure hoặc cho kênh secure bị bỏ qua hoàn toàn (không lỗi, `DBGSTATUS` không bận).
+
+### 6.5 Truy cập từ cổng non-secure
+
+| Thanh ghi | Đọc từ cổng NS | Ghi từ cổng NS |
+|---|---|---|
+| `DSR`, `DPC`, `FSRD`, `FTRD` | Giá trị thật nếu manager NS (`DSR.DNS = 1`), ngược lại 0 | – |
+| `INTEN` | Chỉ các bit có `CR3[e] = 1`, bit khác 0 | Chỉ thay đổi các bit có `CR3[e] = 1` |
+| `INT_EVENT_RIS`, `INTMIS` | Chỉ các bit có `CR3[e] = 1` | – |
+| `INTCLR` | – | Chỉ xóa các bit có `CR3[e] = 1` |
+| `FSRC`, `WDSTAT` | Chỉ các bit của kênh NS (`CSRn.CNS = 1`) | `WDSTAT`: chỉ xóa bit của kênh NS |
+| `FTRn`, `FARn`, `CSRn`, `CPCn`, `SARn`, `DARn`, `CCRn`, `LC0_n`, `LC1_n` | Giá trị thật nếu kênh n NS, ngược lại 0 | – |
+| `DBGSTATUS` | Như cổng secure | – |
+| `DBGINST0/1` | Bản của cổng NS | Bản của cổng NS |
+| `DBGCMD` | – | Thực thi lệnh trong bản NS (xem 6.4) |
+| `CR0`–`CR4`, `CRD`, ID | Như cổng secure | – |
+| `WD` | 0 | Bỏ qua |
+
+Kênh vừa reset là secure (`CNS = 0`), nên cổng NS chỉ thấy một kênh sau khi kênh đó được `DMAGO` với `ns = 1`.
 
 ---
 
@@ -852,11 +919,12 @@ Mã giả kiểu C, với `RD(off)` / `WR(off, v)` là truy cập 32 bit tới `
 
 ### 8.1 Tích hợp phần cứng và power-up
 
-1. Cấp các clock (`clk`, và nếu dùng: `pclk`, `aclk`, `periph_clk[]`). Ở chế độ async, tỉ lệ giữa các clock là tùy ý.
-2. Đặt chân boot ổn định: `boot_from_pc`, `boot_addr`, `boot_manager_ns`.
-3. Assert đồng thời mọi reset trong ít nhất 2 chu kỳ của clock chậm nhất, rồi deassert. Thứ tự deassert không quan trọng, vì mỗi domain tự đồng bộ.
-4. Chờ ít nhất 3 chu kỳ của mỗi clock để reset synchronizer nhả, rồi mới truy cập APB. Không truy cập APB khi lõi còn trong reset.
-5. Nếu `boot_from_pc = 1`, chương trình boot phải được nạp vào bộ nhớ **trước** khi reset nhả.
+1. Cấp các clock (`aclk` — cùng clock với cổng AXI của interconnect — và nếu dùng: `pclk`, `periph_clk[]`). Ở chế độ async, tỉ lệ giữa các clock là tùy ý.
+2. Đặt chân boot ổn định: `boot_from_pc`, `boot_addr`, `boot_manager_ns`, `boot_irq_ns`, `boot_periph_ns`.
+3. Nối cổng APB secure vào bus chỉ master secure truy cập được, cổng `_ns` vào bus của master non-secure. Nếu không dùng TrustZone, có thể bỏ trống cổng NS (`psel_ns = 0`) và đặt `boot_irq_ns`/`boot_periph_ns` tùy ý.
+4. Assert đồng thời mọi reset trong ít nhất 2 chu kỳ của clock chậm nhất, rồi deassert. Thứ tự deassert không quan trọng, vì mỗi domain tự đồng bộ.
+5. Chờ ít nhất 3 chu kỳ của mỗi clock để reset synchronizer nhả, rồi mới truy cập APB. Không truy cập APB khi lõi còn trong reset.
+6. Nếu `boot_from_pc = 1`, chương trình boot phải được nạp vào bộ nhớ **trước** khi reset nhả.
 
 ### 8.2 Khởi tạo driver
 
@@ -1157,28 +1225,33 @@ Phần mềm DMA không cần thay đổi: một truy cập APB trong lúc DMA �
 1. **4 KB**: mọi burst (INCR) phải nằm trọn trong một trang 4 KB. DMA không tự cắt burst; burst vi phạm làm kênh lỗi `ch_rdwr_err` thay vì phát giao dịch AXI bất hợp lệ.
 2. **Burst size** ≤ độ rộng bus (`CRD[2:0]`), nếu không kênh lỗi `ch_rdwr_err`.
 3. **Cân bằng byte**: tổng byte `DMALD` = tổng byte `DMAST`/`DMASTP`. Mỗi `DMAST` chỉ được dùng byte đã được `DMALD` trước đó; nếu không sẽ lỗi `st_data_unavailable`.
-4. **Ngân sách MFIFO**: số byte đã `DMALD` mà chưa `DMAST` không được vượt dung lượng MFIFO của kênh (`mfifo_bytes_per_ch`). Nếu vượt mà không còn store nào đứng sau, kênh lỗi `mfifo_err`. Cách an toàn là xen kẽ LD/ST như ví dụ 8.4.
-5. **Endian swap**: `CCR[30:28]` ≤ `dst_burst_size`, `DAR` align theo nhóm swap; `CCR[31] = 0`.
-6. **DMALPFE có điều kiện** dùng mã LC1.
-7. **Kết thúc bằng `DMAWMB; DMASEV; DMAEND`** nếu interrupt phải có nghĩa là dữ liệu đã ghi xong.
-8. **Chương trình phải có mặt trong bộ nhớ trước `DMAGO`**. Với CPU có D-cache, phải clean cache trước. `DMAGO` tự invalidate instruction cache của DMA.
-9. **Peripheral**: bắt đầu bằng `DMAFLUSHP P` để xóa request cũ và đồng bộ với peripheral.
-10. **Vùng chương trình** của mỗi kênh không được bị ghi đè trong khi kênh đang chạy.
+4. **Ngân sách MFIFO**: MFIFO dùng chung `MFIFO_LINES` line (`CRD[29:20] + 1`). Dữ liệu đã `DMALD` mà chưa `DMAST` của một kênh không được vượt toàn bộ pool; nếu vượt mà không còn store nào đứng sau, kênh lỗi `mfifo_err`. Khi nhiều kênh chạy cùng lúc, kênh giữ nhiều line làm kênh khác phải chờ, và hai kênh cùng giữ line mà không store có thể deadlock (cả hai lỗi `mfifo_err`). Nếu mỗi kênh giữ không quá `MFIFO_LINES/NUM_CH` line (mặc định 32 line = 256 B dữ liệu chưa store) thì không bao giờ phải chờ hay deadlock. Cách an toàn là xen kẽ LD/ST như ví dụ 8.4.
+5. **Security**: kênh NS chỉ dùng event có `CR3[e] = 1` và peripheral có `CR4[p] = 1`; driver NS dùng cổng APB NS và chỉ điều khiển được manager/kênh NS.
+6. **Endian swap**: `CCR[30:28]` ≤ `dst_burst_size`, `DAR` align theo nhóm swap; `CCR[31] = 0`.
+7. **DMALPFE có điều kiện** dùng mã LC1.
+8. **Kết thúc bằng `DMAWMB; DMASEV; DMAEND`** nếu interrupt phải có nghĩa là dữ liệu đã ghi xong.
+9. **Chương trình phải có mặt trong bộ nhớ trước `DMAGO`**. Với CPU có D-cache, phải clean cache trước. `DMAGO` tự invalidate instruction cache của DMA.
+10. **Peripheral**: bắt đầu bằng `DMAFLUSHP P` để xóa request cũ và đồng bộ với peripheral.
+11. **Vùng chương trình** của mỗi kênh không được bị ghi đè trong khi kênh đang chạy.
 
 ### 8.14 Reset mềm và khởi tạo lại
 
 DMA không có bit soft reset. Có hai cách khởi tạo lại:
 * Dùng `DMAKILL` cho mọi kênh rồi cho manager (8.9), sau đó chạy lại `dma_init()`.
-* Assert reset hệ thống cho mọi domain (8.1). Sau reset: `INTEN = 0`, mọi flag event bị xóa, `FTR`/`FTRD` = 0, mọi thread `Stopped`, và cache invalid.
+* Assert reset hệ thống cho mọi domain (8.1). Sau reset: `INTEN = 0`, mọi flag event bị xóa, `FTR`/`FTRD` = 0, mọi thread `Stopped` (kênh secure), cache invalid, và `CR3`/`CR4` được lấy mẫu lại từ chân boot.
 
 ---
 
 ## 9. Khác biệt so với Arm DMA-330 và giới hạn
 
+Phần mô tả DMA-330 dưới đây dựa trên TRM (DDI 0424) theo trí nhớ, chưa đối chiếu lại từng mục với bản gốc.
+
 | Mục | Thiết kế này |
 |---|---|
-| MFIFO | Chia tĩnh cho từng kênh; DMA-330 chia động một MFIFO chung |
-| APB | Một cổng APB; security chỉ còn bit NS của manager/kênh, kiểm tra `DMAGO` và `AxPROT[1]`. Không có cổng APB non-secure, không có `CR3`/`CR4` (đọc về 0) |
+| Clock | Lõi chạy bằng `aclk` như DMA-330 (v1.3). Không còn tùy chọn lõi chạy clock riêng với AXI async bridge |
+| MFIFO | Một MFIFO dùng chung, cấp phát động theo line như DMA-330 (v1.3). Lock-up được phát hiện ngay (self lock-up và deadlock giữa các kênh) bằng `mfifo_err`. Một `DMALD` lớn có thể phải chờ lâu nếu các kênh khác liên tục chiếm pool (cấp phát round-robin giữa các `DMALD` vừa pool, không giữ chỗ cho `DMALD` đang chờ) |
+| Security | Hai cổng APB, `CR3`/`CR4` từ `boot_irq_ns`/`boot_periph_ns`, kiểm tra event/peripheral của thread NS (v1.3). Các chi tiết sau là lựa chọn thiết kế, cần đối chiếu TRM: tài nguyên secure đọc về 0 trên cổng NS (không `PSLVERR`); mỗi cổng có `DBGINST0/1` riêng; `WD` chỉ cổng secure; manager NS flush peripheral secure → `operand_invalid`; `DMAGO` kiểm tra theo security của manager, không theo cổng gửi lệnh debug |
+| Ghi burst | Chỉ bắt đầu burst ghi khi toàn bộ dữ liệu của burst đã nằm trong MFIFO (4.7.4). Tránh deadlock trên W nhưng thêm độ trễ mỗi burst |
 | Endian swap `CCR[30:28]` | Hỗ trợ 16/32/64/128 bit trên dữ liệu ghi. Cấu hình swap không hợp lệ gây lỗi `ch_rdwr_err` (DMA-330: không xác định) |
 | Watchdog | `WD[0] irq_only` giống DMA-330; thêm `WD[31:16] timeout` lập trình được và `WDSTAT`. Phát hiện mọi trường hợp kênh không có progress (kể cả bus treo) và báo `lockup_err` (FTR[31]). Lock-up do MFIFO vẫn được phát hiện ngay bằng `mfifo_err` |
 | 4 KB | Driver phải tự bảo đảm như DMA-330. Thêm bảo vệ phần cứng: burst vi phạm gây `ch_rdwr_err` thay vì phát giao dịch bất hợp lệ |
@@ -1187,6 +1260,6 @@ DMA không có bit soft reset. Có hai cách khởi tạo lại:
 | Status code 3 (Updating PC) | Không dùng |
 | `PSLVERR` | Mặc định luôn bằng 0; tùy chọn `APB_SLVERR = 1` để báo lỗi truy cập |
 | Mở rộng không có trong DMA-330 | `FARn`, `WDSTAT`, `WD.timeout`, Q-Channel, `APB_SLVERR` |
-| Interrupt | `irq[]` ở domain `clk` |
+| Interrupt | `irq[]` ở domain `aclk` |
 | `DMAGO` | Invalidate toàn bộ instruction cache (DMA-330 chỉ invalidate line liên quan) |
 | AXI | Không có `AxQOS`/`AxREGION`/`AxUSER`; mọi giao dịch dữ liệu có `AxLOCK = 0`, `AxCACHE[3] = 0` |

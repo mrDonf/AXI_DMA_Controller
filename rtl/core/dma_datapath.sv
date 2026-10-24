@@ -4,24 +4,43 @@
 // Data path shared by all channel threads:
 //
 //            +------------------- dma_datapath --------------------+
-//  DMALD --->| MFIFO space check -> dma_rd_engine --AR/R--> AXI    |
+//  DMALD --->| MFIFO line reservation -> dma_rd_engine --AR/R--> AXI|
 //            |                          | push                     |
-//            |                     dma_mfifo[ch]  (byte stream)    |
+//            |            dma_mfifo (shared pool, per-channel      |
+//            |                       byte streams)                 |
 //            |                          | pop                      |
 //  DMAST --->| data-available check -> dma_wr_engine --AW/W/B-> AXI|
 //            +-----------------------------------------------------+
 //
-// Per-channel MFIFO bookkeeping (in bytes):
-//   reserved  : space promised to issued loads and not yet freed by stores
-//               (+ DMALD bytes when accepted, - bytes popped onto W)
+// The MFIFO is one pool of MFIFO_LINES lines shared by all channels. A DMALD
+// reserves the lines its bytes will occupy when it is accepted; the lines go
+// back to the pool as the bytes are popped onto W.
+//
+// Per-channel bookkeeping:
+//   held      : lines reserved (accepted loads) and not yet freed by pops
+//   res_off   : byte offset, inside its line, of the next reserved byte
+//   reserved  : bytes reserved and not yet popped
 //   unclaimed : data loaded (or in flight) that no DMAST has claimed yet
 //               (+ DMALD bytes, - DMAST bytes when accepted)
 //
-//   DMALD accepted   when reserved + bytes <= capacity
-//   DMALD lock-up    when it does not fit and no store is pending that could
-//                    ever free space   -> channel fault (mfifo_err)
+//   need      = lines a DMALD of 'bytes' adds:
+//               ceil((res_off + bytes) / NB) - (res_off != 0)
+//   DMALD accepted   when sum(held) + need <= MFIFO_LINES; one DMALD per
+//                    cycle, round robin over the channels whose load fits
 //   DMAST data short when bytes > unclaimed -> channel fault
 //                    (st_data_unavailable); DMASTZ needs no data.
+//
+// A channel whose stream is empty (reserved = 0) gives its last, partly used
+// line back at once and restarts at offset 0, so an idle channel holds no line.
+//
+// Lock-up (fault mfifo_err) of a DMALD that does not fit, while the channel has
+// no store pending that could free its own lines ("stuck"):
+//   * self lock-up : held + need > MFIFO_LINES (it would not fit even in an
+//                    otherwise empty pool)
+//   * deadlock     : every channel holding lines is stuck, so no line can ever
+//                    be freed. All stuck channels that hold lines fault; their
+//                    lines return to the pool.
+// A load that does not fit only because other channels hold lines waits.
 //==============================================================================
 module dma_datapath
   import dma330_pkg::*;
@@ -33,12 +52,13 @@ module dma_datapath
   parameter int WQ_DEPTH    = 4,
   parameter int RD_OUT      = 4,
   parameter int WR_OUT      = 4,
-  parameter int MFIFO_LINES = 32
+  parameter int MFIFO_LINES = 128
 ) (
   input  logic                clk,
   input  logic                rst_n,
 
   // Channel thread interface
+  input  logic [NUM_CH-1:0]   ld_req,       // executing a DMALD (no other fault)
   input  logic [NUM_CH-1:0]   ld_valid,
   input  xfer_t               ld_xfer [NUM_CH],
   output logic [NUM_CH-1:0]   ld_ready,
@@ -116,52 +136,87 @@ module dma_datapath
 );
 
   localparam int NB       = DATA_W / 8;
-  localparam int NBYTE_W  = $clog2(NB) + 1;
-  localparam int MF_CAP   = NB * MFIFO_LINES;        // bytes per channel
+  localparam int LANE_W   = $clog2(NB);
+  localparam int NBYTE_W  = LANE_W + 1;
+  localparam int CH_W     = $clog2(NUM_CH > 1 ? NUM_CH : 2);
+  localparam int MF_CAP   = NB * MFIFO_LINES;        // bytes in the whole pool
   localparam int MF_CNT_W = $clog2(MF_CAP) + 1;
+  localparam int LCNT_W   = $clog2(MFIFO_LINES + 1);
+  localparam int USED_W   = LCNT_W + 4;              // sum over up to 8 channels
+
+  // One-hot (at most one bit set) to index
+  function automatic logic [CH_W-1:0] onehot_idx(input logic [NUM_CH-1:0] v);
+    onehot_idx = '0;
+    for (int c = 0; c < NUM_CH; c++) if (v[c]) onehot_idx = CH_W'(c);
+  endfunction
 
   //============================================================================
-  // MFIFO per channel
+  // Shared MFIFO
   //============================================================================
   logic [NUM_CH-1:0]   mf_push, mf_pop, mf_flush;
   logic [NBYTE_W-1:0]  mf_push_n, mf_pop_n;
-  logic [DATA_W-1:0]   mf_push_data;
-  logic [DATA_W-1:0]   mf_pop_data [NUM_CH];
-  logic [MF_CNT_W-1:0] mf_count    [NUM_CH];
-  logic [NUM_CH-1:0]   wr_active, store_pending;
+  logic [CH_W-1:0]     mf_pop_ch;
+  logic [DATA_W-1:0]   mf_push_data, mf_pop_data;
+  logic                mf_pop_frees;
+  logic [MF_CNT_W-1:0] mf_count  [NUM_CH];
+  logic [LCNT_W-1:0]   mf_nlines [NUM_CH];
+  logic [NUM_CH-1:0]   wr_active, store_pending, release_ch;
 
-  for (genvar ch = 0; ch < NUM_CH; ch++) begin : g_mfifo
-    // A flushed channel keeps its MFIFO until an already started write burst
-    // has drained its (already present) data onto W.
-    assign mf_flush[ch] = ch_flush[ch] && !wr_active[ch];
+  // A flushed channel keeps its MFIFO data until an already started write
+  // burst has drained its (already present) data onto W. A channel with an
+  // empty stream releases its last line.
+  assign mf_flush = (ch_flush & ~wr_active) | release_ch;
 
-    dma_mfifo #(.DATA_W(DATA_W), .LINES(MFIFO_LINES)) u_mfifo (
-      .clk       (clk),
-      .rst_n     (rst_n),
-      .flush     (mf_flush[ch]),
-      .push_en   (mf_push[ch]),
-      .push_n    (mf_push_n),
-      .push_data (mf_push_data),
-      .pop_en    (mf_pop[ch]),
-      .pop_n     (mf_pop_n),
-      .pop_data  (mf_pop_data[ch]),
-      .count     (mf_count[ch])
-    );
-  end
+  dma_mfifo #(.NUM_CH(NUM_CH), .DATA_W(DATA_W), .LINES(MFIFO_LINES)) u_mfifo (
+    .clk       (clk),
+    .rst_n     (rst_n),
+    .flush     (mf_flush),
+    .push_en   (|mf_push),
+    .push_ch   (onehot_idx(mf_push)),
+    .push_n    (mf_push_n),
+    .push_data (mf_push_data),
+    .pop_en    (|mf_pop),
+    .pop_ch    (mf_pop_ch),
+    .pop_n     (mf_pop_n),
+    .pop_data  (mf_pop_data),
+    .pop_frees (mf_pop_frees),
+    .count     (mf_count),
+    .nlines    (mf_nlines)
+  );
 
   //============================================================================
-  // Admission control: MFIFO reservation / data-claim bookkeeping
+  // Admission control: line reservation / data-claim bookkeeping
   //============================================================================
+  logic [LCNT_W-1:0]   held      [NUM_CH];
+  logic [LANE_W-1:0]   res_off   [NUM_CH];
   logic [MF_CNT_W-1:0] reserved  [NUM_CH];
   logic [MF_CNT_W-1:0] unclaimed [NUM_CH];
+  logic [5:0]          need      [NUM_CH];
+  logic [USED_W-1:0]   used;
   logic [NUM_CH-1:0]   rq_push, rq_full, wq_push, wq_full;
-  logic [NUM_CH-1:0]   space_ok;
+  logic [NUM_CH-1:0]   fits, adm_req, adm_gnt, stuck, holder, self_lock;
+  logic                deadlock;
+
+  always_comb begin
+    used = '0;
+    for (int c = 0; c < NUM_CH; c++) used += USED_W'(held[c]);
+  end
 
   for (genvar ch = 0; ch < NUM_CH; ch++) begin : g_admit
-    assign space_ok[ch]  = (int'(reserved[ch]) + int'(ld_xfer[ch].bytes)) <= MF_CAP;
-    assign ld_ready[ch]  = !rq_full[ch] && space_ok[ch] && !ch_flush[ch];
-    assign ld_lockup[ch] = !space_ok[ch] && !store_pending[ch];
-    assign rq_push[ch]   = ld_valid[ch] && ld_ready[ch];
+    assign need[ch] = 6'(((int'(res_off[ch]) + int'(ld_xfer[ch].bytes) + NB - 1) >> LANE_W) -
+                         int'(res_off[ch] != '0));
+    assign fits[ch] = (int'(used) + int'(need[ch])) <= MFIFO_LINES;
+
+    // An empty stream gives back its partly used line (no load is accepted
+    // for the channel in that cycle, it is retried in the next one)
+    assign release_ch[ch] = (reserved[ch] == '0) && (held[ch] != '0);
+    assign adm_req[ch]    = ld_valid[ch] && fits[ch] && !rq_full[ch] && !ch_flush[ch] &&
+                            !release_ch[ch];
+
+    assign stuck[ch]     = ld_req[ch] && !fits[ch] && !store_pending[ch];
+    assign holder[ch]    = (held[ch] != '0) && !release_ch[ch];
+    assign self_lock[ch] = (int'(held[ch]) + int'(need[ch])) > MFIFO_LINES;
+    assign ld_lockup[ch] = stuck[ch] && (self_lock[ch] || (deadlock && holder[ch]));
 
     assign st_short[ch]  = !st_xfer[ch].zero &&
                            (int'(st_xfer[ch].bytes) > int'(unclaimed[ch]));
@@ -170,12 +225,20 @@ module dma_datapath
 
     always_ff @(posedge clk or negedge rst_n) begin
       if (!rst_n) begin
+        held[ch]      <= '0;
+        res_off[ch]   <= '0;
         reserved[ch]  <= '0;
         unclaimed[ch] <= '0;
       end else if (mf_flush[ch]) begin
+        held[ch]      <= '0;
+        res_off[ch]   <= '0;
         reserved[ch]  <= '0;
         unclaimed[ch] <= '0;
       end else begin
+        held[ch]      <= held[ch]
+                       + (rq_push[ch] ? LCNT_W'(need[ch]) : '0)
+                       - LCNT_W'(mf_pop_frees && mf_pop_ch == CH_W'(ch));
+        res_off[ch]   <= res_off[ch] + (rq_push[ch] ? LANE_W'(ld_xfer[ch].bytes) : '0);
         reserved[ch]  <= reserved[ch]
                        + (rq_push[ch] ? MF_CNT_W'(ld_xfer[ch].bytes) : '0)
                        - (mf_pop[ch]  ? MF_CNT_W'(mf_pop_n)          : '0);
@@ -185,6 +248,24 @@ module dma_datapath
       end
     end
   end
+
+  // No line can ever be freed: some stuck channel holds lines, every channel
+  // that holds lines is stuck, and no channel is releasing its last line
+  assign deadlock = |(stuck & holder) && ((holder & ~stuck) == '0) && (release_ch == '0);
+
+  // One load accepted per cycle (the reservation uses the sum of all channels)
+  dma_rr_arbiter #(.N(NUM_CH)) u_adm_arb (
+    .clk       (clk),
+    .rst_n     (rst_n),
+    .req       (adm_req),
+    .advance   (|adm_req),
+    .gnt       (adm_gnt),
+    .gnt_idx   (),
+    .gnt_valid ()
+  );
+
+  assign ld_ready = adm_gnt;
+  assign rq_push  = adm_gnt;            // a grant implies ld_valid
 
   //============================================================================
   // Read engine
@@ -260,6 +341,7 @@ module dma_datapath
     .ch_flush      (ch_flush),
     .mf_count      (mf_count),
     .mf_pop_data   (mf_pop_data),
+    .mf_pop_ch     (mf_pop_ch),
     .mf_pop        (mf_pop),
     .mf_pop_n      (mf_pop_n),
     .m_awvalid     (m_awvalid),
