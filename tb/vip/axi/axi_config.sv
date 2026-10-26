@@ -41,6 +41,10 @@ class axi_config extends uvm_object;
 
   stall_region_t stall_regions [$];
 
+  // Secure-only regions: a non-secure read (ARPROT[1] = 1) returns zeros
+  // (models a TrustZone filter in front of secure memory)
+  stall_region_t ns_raz_regions [$];
+
   `uvm_object_utils_begin(axi_config)
     `uvm_field_enum(uvm_active_passive_enum, is_active, UVM_ALL_ON)
     `uvm_field_int (aw_ready_pct,  UVM_ALL_ON | UVM_DEC)
@@ -103,6 +107,22 @@ class axi_config extends uvm_object;
 
   function void clear_stall_regions();
     stall_regions.delete();
+  endfunction
+
+  function void add_ns_raz_region(bit [AXI_ADDR_W-1:0] lo, bit [AXI_ADDR_W-1:0] hi);
+    stall_region_t r;
+    r.lo = lo; r.hi = hi;
+    ns_raz_regions.push_back(r);
+  endfunction
+
+  function void clear_ns_raz_regions();
+    ns_raz_regions.delete();
+  endfunction
+
+  function bit ns_raz(bit [AXI_ADDR_W-1:0] addr);
+    foreach (ns_raz_regions[i])
+      if (addr >= ns_raz_regions[i].lo && addr <= ns_raz_regions[i].hi) return 1;
+    return 0;
   endfunction
 
   function bit is_stalled(bit [AXI_ADDR_W-1:0] addr);

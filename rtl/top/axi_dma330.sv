@@ -26,7 +26,11 @@
 // make an event / a peripheral usable by non-secure threads.
 //
 // Every asynchronous reset input is synchronized to its own domain
-// (asynchronous assert, synchronous de-assert).
+// (asynchronous assert, synchronous de-assert). Each clock-domain crossing
+// (APB bridge, peripheral synchronizer) is reset as a whole, on both sides,
+// whenever either of its two domains is reset: its toggle handshakes then
+// always restart from the same state, and a reset of one side alone can not
+// make the other side see a phantom transfer.
 //
 // Low power: AMBA Q-Channel on 'aclk' (qreqn is synchronized inside).
 // qactive = core busy OR an APB transfer is requested; it is an asynchronous
@@ -46,7 +50,7 @@ module axi_dma330 #(
   parameter int          MFIFO_LINES  = 128,       // shared by all channels
   parameter int          IC_LINES     = 8,
   parameter int          IC_BEATS     = 4,
-  parameter logic [31:0] PERIPH_ID    = 32'h0000_0330,
+  parameter logic [31:0] PERIPH_ID    = 32'h0034_1330,  // DMA-330 r1p2 (periph_id_3..0)
   // Clock-domain crossing configuration
   parameter bit          APB_ASYNC    = 1'b0,
   parameter bit          PERIPH_ASYNC = 1'b0,
@@ -179,12 +183,19 @@ module axi_dma330 #(
   assign {pslverr_ns, pslverr} = s_pslverr;
 
   if (APB_ASYNC) begin : g_apb_async
-    logic apb_rst_n;
+    logic apb_rst_n;        // bridge, pclk side
+    logic apb_core_rst_n;   // bridge, aclk side
 
     dma_rst_sync u_apb_rst_sync (
       .clk    (pclk),
-      .arst_n (presetn),
+      .arst_n (presetn && aresetn),
       .rst_n  (apb_rst_n)
+    );
+
+    dma_rst_sync u_apb_core_rst_sync (
+      .clk    (aclk),
+      .arst_n (presetn && aresetn),
+      .rst_n  (apb_core_rst_n)
     );
 
     for (genvar i = 0; i < 2; i++) begin : g_port
@@ -200,7 +211,7 @@ module axi_dma330 #(
         .s_prdata  (s_prdata[i]),
         .s_pslverr (s_pslverr[i]),
         .clk       (aclk),
-        .rst_n     (core_rst_n),
+        .rst_n     (apb_core_rst_n),
         .m_psel    (c_psel[i]),
         .m_penable (c_penable[i]),
         .m_pwrite  (c_pwrite[i]),
@@ -231,12 +242,19 @@ module axi_dma330 #(
 
   for (genvar p = 0; p < NUM_PERIPH; p++) begin : g_periph
     if (PERIPH_ASYNC) begin : g_async
-      logic p_rst_n;
+      logic p_rst_n;        // synchronizer, peripheral side
+      logic p_core_rst_n;   // synchronizer, aclk side
 
       dma_rst_sync u_periph_rst_sync (
         .clk    (periph_clk[p]),
-        .arst_n (periph_rst_n[p]),
+        .arst_n (periph_rst_n[p] && aresetn),
         .rst_n  (p_rst_n)
+      );
+
+      dma_rst_sync u_periph_core_rst_sync (
+        .clk    (aclk),
+        .arst_n (periph_rst_n[p] && aresetn),
+        .rst_n  (p_core_rst_n)
       );
 
       dma_periph_sync u_periph_sync (
@@ -250,7 +268,7 @@ module axi_dma330 #(
         .daready      (daready[p]),
         .datype       (datype[p]),
         .clk          (aclk),
-        .rst_n        (core_rst_n),
+        .rst_n        (p_core_rst_n),
         .dr_valid     (c_dr_valid[p]),
         .dr_ready     (c_dr_ready[p]),
         .dr_type      (c_dr_type[p]),

@@ -12,6 +12,8 @@
 // Checks (per AXI ID = channel, bursts of one ID are in order):
 //   * every observed data read / write matches the next expected burst
 //     exactly: address, length, size, burst type, cache, prot, strobes, data
+//     (an expected INCR burst that crosses 4 KB is expected as the two AXI
+//     bursts the DMA splits it into, TRM 2.10.5)
 //   * responses are OKAY (unless the channel is in "ignore" mode for a fault)
 //   * instruction fetches only touch registered program regions
 //   * peripheral acknowledges match the expected type sequence
@@ -61,6 +63,7 @@ class dma_scoreboard extends uvm_scoreboard;
   // Statistics
   int unsigned n_wr_ok, n_rd_ok, n_ifetch, n_ack_ok, n_ignored, n_bytes;
   int unsigned n_xcheck_jobs, n_xcheck_bursts, n_model_jobs, n_arch_jobs, n_arch_bad;
+  int unsigned n_split_4k;                         // expected bursts split at a 4 KB boundary
 
   function new(string name, uvm_component parent);
     super.new(name, parent);
@@ -108,8 +111,8 @@ class dma_scoreboard extends uvm_scoreboard;
 
       if (op.kind == OP_LD) begin
         t.dir   = axi_pkg::AXI_READ;
-        t.cache = {1'b0, job.src_cache};
-        t.prot  = job.src_prot | {1'b0, job.ns, 1'b0};
+        t.cache = {1'b0, job.src_cache};                                 // ARCACHE[2:0]
+        t.prot  = job.src_prot;
         for (int b = 0; b <= op.len; b++) begin
           int unsigned lo, hi;
           bit [31:0]   a = t.beat_addr(b);
@@ -118,27 +121,43 @@ class dma_scoreboard extends uvm_scoreboard;
         end
         rd.push_back(t);
       end else begin
+        byte unsigned bb [$];                // the burst's bytes, in address order
+        int unsigned  total = 0, taken = 0;
         t.dir   = axi_pkg::AXI_WRITE;
-        t.cache = {1'b0, job.dst_cache};
-        t.prot  = job.dst_prot | {1'b0, job.ns, 1'b0};
+        t.cache = {job.dst_cache[2], 1'b0, job.dst_cache[1:0]};          // AWCACHE[3,1,0]
+        t.prot  = job.dst_prot;
+        for (int b = 0; b <= op.len; b++) begin
+          int unsigned lo, hi;
+          t.beat_lanes(b, lo, hi);
+          total += hi - lo + 1;
+        end
+        for (int i = 0; i < total; i++) begin
+          byte unsigned v = 0;
+          if (op.kind == OP_ST) begin
+            if (stream.size() == 0)
+              `uvm_fatal("SB_MODEL", $sformatf("ch%0d: store without loaded data (bad job)", ch))
+            v = stream.pop_front();
+          end
+          bb.push_back(v);
+        end
+        // CCR endian swap: the bytes of every group of 2**swap consecutive
+        // bytes are reversed (DAR is aligned to the group, the burst holds
+        // whole groups); a group may span several narrow beats
+        if (op.kind == OP_ST && job.swap != 0) begin
+          byte unsigned sw [$];
+          int unsigned  g = 1 << job.swap;
+          foreach (bb[i]) sw.push_back(bb[i ^ (g - 1)]);
+          bb = sw;
+        end
         for (int b = 0; b <= op.len; b++) begin
           int unsigned         lo, hi;
           bit [axi_pkg::AXI_DATA_W-1:0] d = '0;
           bit [axi_pkg::AXI_STRB_W-1:0] s = '0;
           t.beat_lanes(b, lo, hi);
           for (int lane = lo; lane <= hi; lane++) begin
-            byte unsigned v = 0;
-            if (op.kind == OP_ST) begin
-              if (stream.size() == 0)
-                `uvm_fatal("SB_MODEL", $sformatf("ch%0d: store without loaded data (bad job)", ch))
-              v = stream.pop_front();
-            end
-            d[lane*8 +: 8] = v;
+            d[lane*8 +: 8] = bb[taken++];
             s[lane]        = 1'b1;
           end
-          // CCR endian swap: bytes reversed inside each aligned group
-          if (op.kind == OP_ST && job.swap != 0)
-            d = axi_pkg::AXI_DATA_W'(dma330_pkg::endian_swap(128'(d), job.swap));
           t.data.push_back(d);
           t.strb.push_back(s);
           if (count) n_bytes += hi - lo + 1;
@@ -146,6 +165,38 @@ class dma_scoreboard extends uvm_scoreboard;
         wr.push_back(t);
       end
     end
+  endfunction
+
+  // An INCR burst that crosses a 4 KB boundary appears on AXI as two bursts:
+  // up to the boundary, and from it (TRM 2.10.5). Bursts are at most 256 B,
+  // so they cross at most once.
+  function void split_4k(ref axi_pkg::axi_txn q [$]);
+    axi_pkg::axi_txn out [$];
+    foreach (q[i]) begin
+      axi_pkg::axi_txn t = q[i];
+      int unsigned     start, span, n1;
+      start = int'(t.addr[11:0]) & ~(t.bytes_per_beat() - 1);
+      span  = t.num_beats() * t.bytes_per_beat();
+      if (t.burst != axi_pkg::AXI_INCR || start + span <= 4096) begin
+        out.push_back(t);
+        continue;
+      end
+      n1 = (4096 - start) / t.bytes_per_beat();
+      n_split_4k++;
+      for (int piece = 0; piece < 2; piece++) begin
+        axi_pkg::axi_txn p = axi_pkg::axi_txn::type_id::create(t.get_name());
+        int unsigned     b0 = (piece == 0) ? 0 : n1;
+        int unsigned     nb = (piece == 0) ? n1 : t.num_beats() - n1;
+        p.dir   = t.dir;    p.id    = t.id;     p.size = t.size;  p.burst = t.burst;
+        p.cache = t.cache;  p.prot  = t.prot;
+        p.addr  = (piece == 0) ? t.addr : {t.addr[31:12] + 20'd1, 12'h000};
+        p.len   = 8'(nb - 1);
+        for (int b = b0; b < b0 + nb && b < t.data.size(); b++) p.data.push_back(t.data[b]);
+        for (int b = b0; b < b0 + nb && b < t.strb.size(); b++) p.strb.push_back(t.strb[b]);
+        out.push_back(p);
+      end
+    end
+    q = out;
   endfunction
 
   // Registers a job: its bursts become the expected traffic of the channel.
@@ -171,6 +222,8 @@ class dma_scoreboard extends uvm_scoreboard;
       foreach (job.cm_ref.acks[i]) exp_ack[job.cm_ref.acks[i].periph].push_back(job.cm_ref.acks[i].ack);
       n_model_jobs++;
     end
+    split_4k(rd);
+    split_4k(wr);
     foreach (rd[i]) exp_rd[ch].push_back(rd[i]);
     foreach (wr[i]) exp_wr[ch].push_back(wr[i]);
     first_rd_time.delete(ch);
@@ -402,8 +455,12 @@ class dma_scoreboard extends uvm_scoreboard;
       if (t.addr >= prog_regions[i].lo && t.addr <= prog_regions[i].hi) hit = 1;
     if (!hit)
       `uvm_error("SB_IFETCH", $sformatf("instruction fetch outside program memory: 0x%08h", t.addr))
-    if (t.prot[2] != 1'b1)
-      `uvm_error("SB_IFETCH", $sformatf("instruction fetch without ARPROT[2]: prot=%0h", t.prot))
+    // TRM Table 2-1: privileged instruction access, cacheable write-through
+    // allocate-on-read
+    if (t.prot[2] != 1'b1 || t.prot[0] != 1'b1)
+      `uvm_error("SB_IFETCH", $sformatf("instruction fetch not privileged + instruction: prot=%0h", t.prot))
+    if (t.cache != 4'b0110)
+      `uvm_error("SB_IFETCH", $sformatf("instruction fetch ARCACHE=%0h, 0110 expected", t.cache))
     if (t.len != dma_tb_params_pkg::IC_BEATS - 1 || t.burst != axi_pkg::AXI_INCR)
       `uvm_error("SB_IFETCH", {"unexpected i-cache refill shape: ", t.convert2string()})
   endfunction
@@ -422,10 +479,11 @@ class dma_scoreboard extends uvm_scoreboard;
     `uvm_info("SB", $sformatf({"\n  write bursts matched : %0d\n  read bursts matched  : %0d",
                                "\n  bytes checked        : %0d\n  instruction fetches  : %0d",
                                "\n  periph acks matched  : %0d\n  ignored (fault/kill) : %0d",
+                               "\n  bursts split at 4 KB : %0d",
                                "\n  C model              : %s",
                                "\n    jobs cross-checked : %0d (%0d bursts)\n    jobs predicted by the model alone: %0d",
                                "\n    final registers compared: %0d jobs (%0d mismatches)"},
-                              n_wr_ok, n_rd_ok, n_bytes, n_ifetch, n_ack_ok, n_ignored,
+                              n_wr_ok, n_rd_ok, n_bytes, n_ifetch, n_ack_ok, n_ignored, n_split_4k,
                               cmodel_available() ? "on" : "off", n_xcheck_jobs, n_xcheck_bursts,
                               n_model_jobs, n_arch_jobs, n_arch_bad), UVM_LOW)
   endfunction

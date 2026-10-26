@@ -3,23 +3,27 @@
 //------------------------------------------------------------------------------
 // DMA manager thread.
 //
-// Executes the manager subset of the ISA: DMAGO, DMASEV, DMAWFE, DMAFLUSHP,
-// DMAEND, DMAKILL, DMANOP. It runs either
+// Executes the manager subset of the ISA: DMAGO, DMASEV, DMAWFE, DMAEND,
+// DMAKILL, DMANOP (DMAFLUSHP is a channel-only instruction: undefined here).
+// It runs either
 //   * a program from memory (boot_from_pc at reset), or
 //   * single instructions written through the debug registers
 //     (DBGINST0/1 + DBGCMD) - the usual way a driver starts channels.
 //
 //   BOOT --boot_from_pc--> FETCH <--> EXEC --> WFE
-//     |                      ^         |
-//     +--> STOPPED <---------+---------+  (DMAEND / DMAKILL / debug done)
-//            |  ^
-//            |  +---- FAULTING <--- any fault  (left with debug DMAKILL)
+//     |                      ^         |        |  ^
+//     +--> STOPPED <---------+---------+        |  | debug instruction done
+//            |  ^         (DMAEND / DMAKILL)    v  |
+//            |  +---- FAULTING <--- any fault   EXEC (debug)
 //            +-- debug instruction --> EXEC
 //
+// Debug instructions (DMAGO, DMASEV, DMAKILL) are taken while the manager is
+// stopped or waiting for an event (TRM 2.5.1: "real-time"); a debug
+// instruction issued while it waits returns it to the wait (DMAKILL stops it).
 // DMAGO on a channel that is not stopped is ignored by the channel (NOP), as
-// in DMA-330. A non-secure manager cannot start a secure channel (dmago_err),
-// cannot use a secure event in DMASEV / DMAWFE (mgr_evnt_err) and cannot flush
-// a secure peripheral (operand_invalid).
+// in DMA-330. A non-secure manager cannot start a secure channel (dmago_err)
+// and cannot use a secure event in DMASEV / DMAWFE (mgr_evnt_err). A channel
+// or event number the configuration does not have is an invalid operand.
 //==============================================================================
 module dma_manager
   import dma330_pkg::*;
@@ -88,6 +92,7 @@ module dma_manager
   logic [ADDR_W-1:0] pc;
   logic              mgr_ns;       // manager security state
   logic              dbg_mode;     // executing a debug instruction
+  logic              dbg_ret_wfe;  // ... taken while waiting for an event
   logic [INSN_W-1:0] dbg_insn_q;
   logic [4:0]        wake_num;
 
@@ -145,12 +150,11 @@ module dma_manager
         exec_fault[FTD_OPERAND_INVALID] = (int'(go_ch) >= NUM_CH);
         exec_fault[FTD_DMAGO_ERR]       = mgr_ns && !op[1];   // NS mgr -> secure ch
       end
-      I_SEV, I_WFE:
-        exec_fault[FTD_MGR_EVNT_ERR]    = (int'(num5) >= NUM_EVENTS) ||
-                                          (mgr_ns && !irq_ns32[num5]);
-      I_FLUSHP:
-        exec_fault[FTD_OPERAND_INVALID] = (int'(num5) >= NUM_PERIPH) ||
-                                          (mgr_ns && !periph_ns32[num5]);
+      I_SEV, I_WFE: begin
+        exec_fault[FTD_OPERAND_INVALID] = (int'(num5) >= NUM_EVENTS);
+        exec_fault[FTD_MGR_EVNT_ERR]    = (int'(num5) < NUM_EVENTS) &&
+                                          mgr_ns && !irq_ns32[num5];
+      end
       I_END, I_KILL, I_NOP: ;
       default:
         exec_fault[FTD_UNDEF_INSTR]     = 1'b1;
@@ -180,19 +184,16 @@ module dma_manager
   assign sev_event    = num5;
   assign wfe_valid    = (state == M_WFE);
   assign wfe_event    = wake_num;
-  assign flush_valid  = in_exec_ok && (cls == I_FLUSHP);
+  assign flush_valid  = 1'b0;                     // DMAFLUSHP is channel only
   assign flush_periph = num5;
 
   // DMAGO invalidates the instruction cache so a channel never runs stale
   // code; DMAWFE can request it explicitly.
   assign ic_inv_req   = in_exec_ok && ((cls == I_GO) || (cls == I_WFE && b1[1]));
 
-  // An instruction completes this cycle (used to retire debug instructions)
-  logic exec_done;
-  assign exec_done = (state == M_EXEC) &&
-                     ((exec_fault != '0) || (cls != I_FLUSHP) || flush_ready);
-
-  assign dbg_done = (dbg_mode && exec_done) ||
+  // Every manager instruction completes in the cycle it executes (the debug
+  // instruction is retired then)
+  assign dbg_done = (dbg_mode && state == M_EXEC) ||
                     (state == M_FAULTING && dbg_valid);
 
   //============================================================================
@@ -204,6 +205,7 @@ module dma_manager
       pc         <= '0;
       mgr_ns     <= 1'b0;
       dbg_mode   <= 1'b0;
+      dbg_ret_wfe <= 1'b0;
       dbg_insn_q <= '0;
       wake_num   <= '0;
       ftrd       <= '0;
@@ -236,24 +238,26 @@ module dma_manager
           if (exec_fault != '0) begin
             ftrd     <= ftrd | exec_fault;
             dbg_mode <= 1'b0;
+            dbg_ret_wfe <= 1'b0;
             state    <= M_FAULTING;
-          end else if (exec_done) begin
+          end else begin
             case (cls)
               I_END, I_KILL: state <= M_STOPPED;
               I_WFE: begin
                 wake_num <= num5;
                 state    <= M_WFE;
               end
-              default: begin                       // GO, SEV, NOP, FLUSHP
+              default: begin                       // GO, SEV, NOP
                 if (dbg_mode) begin
-                  state <= M_STOPPED;
+                  state <= dbg_ret_wfe ? M_WFE : M_STOPPED;
                 end else begin
                   pc    <= pc + ADDR_W'(insn_len(op));
                   state <= M_FETCH;
                 end
               end
             endcase
-            dbg_mode <= 1'b0;
+            dbg_mode    <= 1'b0;
+            dbg_ret_wfe <= 1'b0;
           end
         end
 
@@ -261,6 +265,11 @@ module dma_manager
           if (wfe_hit) begin
             pc    <= pc + 2;
             state <= M_FETCH;
+          end else if (dbg_valid) begin           // debug instruction while waiting
+            dbg_mode    <= 1'b1;
+            dbg_ret_wfe <= 1'b1;
+            dbg_insn_q  <= dbg_insn;
+            state       <= M_EXEC;
           end
         end
 

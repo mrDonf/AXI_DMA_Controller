@@ -117,8 +117,8 @@ package dma330_pkg;
   // Manager (FTRD)
   localparam int FTD_UNDEF_INSTR     = 0;
   localparam int FTD_OPERAND_INVALID = 1;
-  localparam int FTD_MGR_EVNT_ERR    = 4;
-  localparam int FTD_DMAGO_ERR       = 5;
+  localparam int FTD_DMAGO_ERR       = 4;
+  localparam int FTD_MGR_EVNT_ERR    = 5;
   localparam int FTD_INSTR_FETCH_ERR = 16;
   localparam int FTD_DBG_INSTR       = 30;
   // Channel (FTRn)
@@ -141,7 +141,7 @@ package dma330_pkg;
   typedef struct packed {
     logic       reserved31;       // [31]    reserved, ignored
     logic [2:0] endian_swap;      // [30:28] 0 none, 1: 16-bit, 2: 32-bit, 3: 64-bit, 4: 128-bit
-    logic [2:0] dst_cache;        // [27:25] -> AWCACHE[2:0]
+    logic [2:0] dst_cache;        // [27:25] -> AWCACHE[3,1,0] (AWCACHE[2] = 0)
     logic [2:0] dst_prot;         // [24:22] -> AWPROT
     logic [3:0] dst_burst_len;    // [21:18] beats - 1
     logic [2:0] dst_burst_size;   // [17:15] log2(bytes per beat)
@@ -201,7 +201,9 @@ package dma330_pkg;
   endfunction
 
   // An INCR burst whose bytes span two 4 KB pages (illegal on AXI). The
-  // aligned start address is used, as the AXI rule is defined on it.
+  // aligned start address is used, as the AXI rule is defined on it. Such a
+  // burst is issued as two AXI bursts (xfer_piece), transparently to the
+  // channel program.
   function automatic logic crosses_4k(input logic [ADDR_W-1:0] addr,
                                       input logic [2:0]        size,
                                       input logic [3:0]        len,
@@ -210,6 +212,33 @@ package dma330_pkg;
     start = {1'b0, addr[11:0] & ~12'(size_bytes(size) - 5'd1)};
     span  = (13'(len) + 13'd1) << size;
     return inc && ((start + span) > 13'd4096);
+  endfunction
+
+  // One AXI burst of a DMALD / DMAST. A burst that does not cross 4 KB is
+  // issued as it is. One that crosses is split at the boundary: piece 0 runs
+  // up to the boundary, piece 1 starts on it (aligned, so all its beats are
+  // full) and carries the peripheral acknowledge. A burst is at most
+  // 16 x 16 B, so it crosses at most once.
+  function automatic xfer_t xfer_piece(input xfer_t x, input logic second);
+    xfer_t               p;
+    logic [12:0]         start, n1;
+    logic [XBYTES_W-1:0] b1;
+    p = x;
+    if (crosses_4k(x.addr, x.size, x.len, x.inc)) begin
+      start = {1'b0, x.addr[11:0] & ~12'(size_bytes(x.size) - 5'd1)};
+      n1    = (13'd4096 - start) >> x.size;              // beats before the boundary
+      b1    = XBYTES_W'(n1 << x.size) - XBYTES_W'(size_offset(x.addr, x.size));
+      if (!second) begin
+        p.len        = 4'(n1 - 13'd1);
+        p.bytes      = b1;
+        p.periph_ack = 1'b0;
+      end else begin
+        p.addr  = {x.addr[ADDR_W-1:12] + 1'b1, 12'h000};
+        p.len   = 4'(13'(x.len) - n1);
+        p.bytes = x.bytes - b1;
+      end
+    end
+    return p;
   endfunction
 
   // Endian swap: bytes are reversed inside every aligned (2**swap)-byte group

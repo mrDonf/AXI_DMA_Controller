@@ -16,3 +16,7 @@ sim/*.ucdb
 sim/*.qdb
 sim/*.qpg
 sim/*.qtl
+
+syn/constraints/axi_dma330.sdc
+
+docs/SDC_CONSTRAINTS.md

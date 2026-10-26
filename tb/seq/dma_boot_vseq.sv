@@ -3,8 +3,11 @@
 //
 // The test prepares everything before reset is released:
 //   manager program @ boot_addr :  DMAGO ch0 (ns) ; DMAGO ch1 (ns)
-//                                  DMAWFE 12      ; DMASEV 11 ; DMAEND
+//                                  DMAWFE 12 ; DMAWFE 13 ; DMASEV 11 ; DMAEND
 //   ch1's program ends with DMASEV 12 (event for the manager)
+// While the manager waits in DMAWFE 13, a debug DMASEV 13 is issued: debug
+// instructions are taken while the manager waits (TRM 2.5.1), so it runs,
+// the manager returns to its wait and is woken by that very event.
 // This sequence then checks completion, and finally uses the non-secure
 // manager to provoke a dmago_err (DMAGO to a secure channel).
 //==============================================================================
@@ -15,6 +18,7 @@ class dma_boot_vseq extends dma_base_vseq;
   dma_job      jobs [$];
   bit [31:0]   mgr_end_pc;
   localparam int EV_MGR_DONE = 11;
+  localparam int EV_DBG      = 13;
 
   function new(string name = "dma_boot_vseq");
     super.new(name);
@@ -24,6 +28,19 @@ class dma_boot_vseq extends dma_base_vseq;
     uvm_reg_data_t v;
 
     reg_wr(rm.INTEN, (1 << EV_MGR_DONE) | ((1 << dma_tb_params_pkg::NUM_CH) - 1));
+
+    // The manager waits for EV_DBG: a debug instruction is still accepted
+    for (int i = 0; i < 20000; i++) begin
+      reg_rd(rm.DSR, v);
+      if (v[3:0] == dma330_pkg::ST_WAIT_EVENT && v[8:4] == EV_DBG) break;
+      vif.wait_clks(20);
+    end
+    if (v[3:0] != dma330_pkg::ST_WAIT_EVENT || v[8:4] != EV_DBG)
+      `uvm_error("BOOT", $sformatf("DSR=0x%08h, manager waiting for event %0d expected", v, EV_DBG))
+    dbg_exec(0, 0, '{8'h34, 8'(EV_DBG << 3)});
+    vif.wait_clks(20);
+    reg_rd(rm.DBGSTATUS, v);
+    if (v[0]) `uvm_error("BOOT", "debug DMASEV not taken while the manager waits for an event")
     wait_irq(EV_MGR_DONE);
     clear_irq(EV_MGR_DONE);
 
@@ -56,7 +73,8 @@ class dma_boot_vseq extends dma_base_vseq;
     dbg_exec(0, 0, '{8'hA0, 8'd2, 8'h00, 8'h00, 8'h01, 8'h00});
     wait_abort();
     reg_rd(rm.FTRD, v);
-    if (!v[dma330_pkg::FTD_DMAGO_ERR]) `uvm_error("BOOT", $sformatf("FTRD=0x%08h, dmago_err expected", v))
+    // TRM Table 3-15: dmago_err is bit 4 (dbg_instr bit 30)
+    if (v != 32'h4000_0010) `uvm_error("BOOT", $sformatf("FTRD=0x%08h, 0x40000010 (dmago_err) expected", v))
     p_sequencer.cov.sample_fault(v, 1);
     kill_manager();
     vif.wait_clks(20);

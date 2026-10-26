@@ -14,6 +14,16 @@
 //   3. two channels wait on the same peripheral: requests are shared, both
 //      DMAFLUSHPs are answered, the second flush acknowledge is ignored
 //   4. a request that arrives while the DMA is still flushing is dropped
+//   5. DMAWFP burst drops a single request and keeps waiting (TRM 2.6.5)
+//   6. DMAWFP single continues on a burst request and leaves it pending for
+//      the next DMAWFP; DMALDS / DMASTPS move one beat
+//   7. DMAFLUSHP waits for the acknowledge of an earlier DMASTPB: the flush
+//      request never overtakes it
+//   8. DMAWFP burst clears request_last even when the request is flagged
+//      last: a DMALPFE loop around it does not exit (TRM 2.6.4)
+//   9. Reset of one peripheral domain alone (periph_rst_n) after an odd
+//      number of transfers each way: no phantom request reaches a DMAWFP and
+//      no phantom acknowledge reaches the peripheral
 //------------------------------------------------------------------------------
 class dma_periph_corner_vseq extends dma_base_vseq;
 
@@ -23,9 +33,11 @@ class dma_periph_corner_vseq extends dma_base_vseq;
     super.new(name);
   endfunction
 
-  protected task send_requests(int unsigned p, dma_periph_pkg::periph_req_e types[$]);
+  protected task send_requests(int unsigned p, dma_periph_pkg::periph_req_e types[$],
+                               bit last_on_final = 0);
     dma_periph_pkg::periph_req_seq s = dma_periph_pkg::periph_req_seq::type_id::create("reqs");
-    s.types = types;
+    s.types         = types;
+    s.last_on_final = last_on_final;
     s.start(p_sequencer.per_sqr[p]);
   endtask
 
@@ -33,6 +45,61 @@ class dma_periph_corner_vseq extends dma_base_vseq;
     wait_irq(job.irq_ev);
     clear_irq(job.irq_ev);
     wait_ch_status(job.ch, dma330_pkg::ST_STOPPED);
+  endtask
+
+  // Hand-written memory -> peripheral program (4 x 8-byte bursts, FIXED
+  // destination); the scoreboard ignores the channel's AXI traffic but
+  // checks the acknowledges. Returns SAR at the end.
+  protected function dma330_asm hand_prog(int unsigned ch, int unsigned p);
+    dma330_asm a = dma330_asm::type_id::create("pc_prog");
+    a.dmamov(RD_SAR, dma_job::src_base(ch) + 32'h6000);
+    a.dmamov(RD_DAR, dma_job::fifo_addr(p));
+    a.dmamov(RD_CCR, dma330_asm::ccr(1, 3, 4, 0, 3, 4));
+    a.dmaflushp(p);
+    return a;
+  endfunction
+
+  protected task run_hand(string name, int unsigned ch, int unsigned p, dma330_asm a,
+                          dma_periph_pkg::periph_req_e first [$],
+                          dma_periph_pkg::periph_req_e rest [$],
+                          dma_periph_pkg::periph_ack_e acks [$], int unsigned sar_moved);
+    dma_periph_pkg::periph_config qcfg = p_sequencer.cfg.per_cfg[p];
+    bit [31:0]     pc = dma_job::prog_base(ch) + 32'h6000;
+    uvm_reg_data_t v;
+    a.dmawmb();
+    a.dmasev(ch);
+    a.dmaend();
+    `uvm_info("PCORNER", $sformatf("%s:%s", name, a.sprint_listing()), UVM_MEDIUM)
+    p_sequencer.cfg.mem.write_bytes(pc, a.code);
+    p_sequencer.sb.add_prog_region(pc, a.code.size());
+    p_sequencer.cov.sample_program(a.code);
+    p_sequencer.sb.ignore_channel(ch, 1);
+    foreach (acks[i]) p_sequencer.sb.add_expected_ack(p, acks[i]);
+    qcfg.wait_ack = 0;
+    start_channel(ch, pc);
+    wait_ch_status(ch, dma330_pkg::ST_WAIT_PERIPH);
+    send_requests(p, first);
+    if (rest.size() != 0) begin
+      // The first requests alone must not let the channel go on
+      vif.wait_clks(300);
+      reg_rd(rm.CSR[ch], v);
+      if (v[3:0] != dma330_pkg::ST_WAIT_PERIPH)
+        `uvm_error("PCORNER", $sformatf("%s: CSR=0x%08h, still waiting for the peripheral expected", name, v))
+      send_requests(p, rest);
+    end
+    wait_irq(ch);
+    clear_irq(ch);
+    wait_ch_status(ch, dma330_pkg::ST_STOPPED);
+    reg_rd(rm.FTR[ch], v);
+    if (v != 0) `uvm_error("PCORNER", $sformatf("%s: FTR=0x%08h", name, v))
+    reg_rd(rm.SAR[ch], v);
+    if (v != dma_job::src_base(ch) + 32'h6000 + sar_moved)
+      `uvm_error("PCORNER", $sformatf("%s: SAR moved by %0d bytes, %0d expected",
+                                      name, v - (dma_job::src_base(ch) + 32'h6000), sar_moved))
+    vif.wait_clks(300);                                    // last ack through the CDC
+    qcfg.wait_ack = 1;
+    p_sequencer.sb.ignore_channel(ch, 0);
+    `uvm_info("PCORNER", {name, " OK"}, UVM_LOW)
   endtask
 
   protected function dma_job m2p_job(int unsigned ch, int unsigned p, int unsigned n);
@@ -135,6 +202,121 @@ class dma_periph_corner_vseq extends dma_base_vseq;
     p_sequencer.sb.job_done(j0);
     p_sequencer.sb.job_done(j1);
     `uvm_info("PCORNER", "3: two channels shared one peripheral", UVM_LOW)
+
+    //------------------------------------------------------------ 5. WFP burst drops a single
+    begin
+      dma330_asm a = hand_prog(2, p);
+      a.dmawfp(p, WFP_BURST);
+      a.dmald(COND_B);
+      a.dmastp(COND_B, p);
+      run_hand("5: DMAWFP burst drops a single request", 2, p, a,
+               '{dma_periph_pkg::PREQ_SINGLE}, '{dma_periph_pkg::PREQ_BURST},
+               '{dma_periph_pkg::PACK_FLUSH, dma_periph_pkg::PACK_BURST}, 32);
+    end
+
+    //------------------------------------------------------------ 6. WFP single keeps a burst
+    begin
+      dma330_asm a = hand_prog(2, p);
+      a.dmawfp(p, WFP_SINGLE);                            // request_type = single
+      a.dmald(COND_S);                                    // one beat
+      a.dmald(COND_B);                                    // NOP
+      a.dmastp(COND_S, p);                                // one beat, single ack
+      a.dmawfp(p, WFP_PERIPH);                            // the burst request, still pending
+      a.dmald(COND_B);
+      a.dmastp(COND_B, p);
+      run_hand("6: DMAWFP single leaves a burst request pending", 2, p, a,
+               '{dma_periph_pkg::PREQ_BURST}, '{},
+               '{dma_periph_pkg::PACK_FLUSH, dma_periph_pkg::PACK_SINGLE, dma_periph_pkg::PACK_BURST},
+               8 + 32);
+    end
+
+    //------------------------------------------------------------ 7. flush after an ack
+    begin
+      dma330_asm a = hand_prog(3, p);
+      a.dmawfp(p, WFP_BURST);
+      a.dmald();
+      a.dmastp(COND_B, p);
+      a.dmaflushp(p);                                     // after the STPB acknowledge
+      run_hand("7: DMAFLUSHP waits for the DMASTPB acknowledge", 3, p, a,
+               '{dma_periph_pkg::PREQ_BURST}, '{},
+               '{dma_periph_pkg::PACK_FLUSH, dma_periph_pkg::PACK_BURST, dma_periph_pkg::PACK_FLUSH}, 32);
+    end
+
+    //------------------------------------------------------------ 8. WFP burst: request_last = 0
+    begin
+      dma_periph_pkg::periph_config qcfg = p_sequencer.cfg.per_cfg[p];
+      dma330_asm     a = hand_prog(2, p);
+      int unsigned   body;
+      uvm_reg_data_t v;
+      body = a.pc();
+      a.dmawfp(p, WFP_BURST);
+      a.dmald(COND_B);
+      a.dmastp(COND_B, p);
+      a.dmalpend(1, body, COND_ALWAYS, 1);                // DMALPFE: exits on request_last
+      a.dmaend();
+      p_sequencer.cfg.mem.write_bytes(dma_job::prog_base(2) + 32'h6000, a.code);
+      p_sequencer.sb.add_prog_region(dma_job::prog_base(2) + 32'h6000, a.code.size());
+      p_sequencer.sb.ignore_channel(2, 1);
+      p_sequencer.sb.add_expected_ack(p, dma_periph_pkg::PACK_FLUSH);
+      p_sequencer.sb.add_expected_ack(p, dma_periph_pkg::PACK_BURST);
+      qcfg.wait_ack = 0;
+      start_channel(2, dma_job::prog_base(2) + 32'h6000);
+      wait_ch_status(2, dma330_pkg::ST_WAIT_PERIPH);
+      send_requests(p, '{dma_periph_pkg::PREQ_BURST}, 1);  // flagged last
+      vif.wait_clks(500);
+      reg_rd(rm.CSR[2], v);
+      if (v[3:0] != dma330_pkg::ST_WAIT_PERIPH)
+        `uvm_error("PCORNER", $sformatf("8: CSR=0x%08h, the DMALPFE loop must go on (request_last = 0)", v))
+      reg_rd(rm.SAR[2], v);
+      if (v != dma_job::src_base(2) + 32'h6000 + 32)
+        `uvm_error("PCORNER", $sformatf("8: SAR=0x%08h after one burst request", v))
+      kill_channel(2);
+      wait_ch_status(2, dma330_pkg::ST_STOPPED);
+      vif.wait_clks(300);
+      qcfg.wait_ack = 1;
+      p_sequencer.sb.ignore_channel(2, 0);
+      `uvm_info("PCORNER", "8: DMAWFP burst cleared request_last", UVM_LOW)
+    end
+
+    //------------------------------------------------------------ 9. peripheral-only reset
+    begin
+      int unsigned   q = 1;
+      dma_periph_pkg::periph_config qcfg = p_sequencer.cfg.per_cfg[q];
+      dma330_asm     a = dma330_asm::type_id::create("pc_prog");
+      bit [31:0]     pc = dma_job::prog_base(1) + 32'h6000;
+      uvm_reg_data_t v;
+      // flush acknowledge + 2 requests = 3 transfers into the DMA, flush +
+      // 2 acknowledges = 3 out of it: both toggle handshakes end at 1
+      run_job(m2p_job(1, q, 2));
+      vif.pulse_periph_reset(q, 10);
+      vif.wait_clks(100);
+      // No DMAFLUSHP: a phantom request would satisfy the DMAWFP at once
+      a.dmamov(RD_SAR, dma_job::src_base(1) + 32'h6000);
+      a.dmamov(RD_DAR, dma_job::fifo_addr(q));
+      a.dmamov(RD_CCR, dma330_asm::ccr(1, 3, 4, 0, 3, 4));
+      a.dmawfp(q, WFP_PERIPH);
+      a.dmald(COND_B);
+      a.dmastp(COND_B, q);
+      a.dmawmb();
+      a.dmasev(1);
+      a.dmaend();
+      p_sequencer.cfg.mem.write_bytes(pc, a.code);
+      p_sequencer.sb.add_prog_region(pc, a.code.size());
+      p_sequencer.sb.ignore_channel(1, 1);
+      p_sequencer.sb.add_expected_ack(q, dma_periph_pkg::PACK_BURST);
+      start_channel(1, pc);
+      vif.wait_clks(500);
+      reg_rd(rm.CSR[1], v);
+      if (v[3:0] != dma330_pkg::ST_WAIT_PERIPH)
+        `uvm_error("PCORNER", $sformatf("9: CSR=0x%08h, a phantom request after the peripheral reset", v))
+      send_requests(q, '{dma_periph_pkg::PREQ_BURST});
+      wait_irq(1);
+      clear_irq(1);
+      wait_ch_status(1, dma330_pkg::ST_STOPPED);
+      vif.wait_clks(300);
+      p_sequencer.sb.ignore_channel(1, 0);
+      `uvm_info("PCORNER", "9: peripheral-only reset left no phantom transfer", UVM_LOW)
+    end
   endtask
 
 endclass : dma_periph_corner_vseq

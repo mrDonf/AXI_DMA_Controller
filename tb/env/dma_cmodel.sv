@@ -167,7 +167,7 @@ class dma_cmodel extends uvm_object;
     t.len   = ev(F_LEN);
     t.size  = ev(F_SIZE);
     t.burst = ev(F_INC) ? axi_pkg::AXI_INCR : axi_pkg::AXI_FIXED;
-    t.cache = {1'b0, cache[2:0]};
+    t.cache = cache[3:0];                    // AxCACHE as the model maps it
     t.prot  = prot[2:0];
     if (is_write) begin
       for (int b = 0; b < int'(ev(F_NBEATS)); b++) begin

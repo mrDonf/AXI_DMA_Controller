@@ -7,12 +7,19 @@ secure and a non-secure APB port, optional clock-domain crossing on the APB and
 peripheral interfaces, and a UVM-1.2 verification environment with in-house
 VIPs, SVA and a C reference model (DPI-C).
 
+Behaviour checked against the DMA-330 r1p2 TRM (v1.4): single-beat S forms,
+DMAWFP single/burst semantics, 4 KB crossing bursts split in two, load-lock and
+precise MFIFO lock-up detection, DMAFLUSHP as a barrier, NS checks of CCR,
+NS-tagged instruction cache, TRM fault codes, AXI attributes and IDs. The
+remaining differences are listed in DESIGN_SPEC section 9.
+
 Industry-grade features beyond the basic DMA-330 behaviour:
 
-* hardware AXI protocol protection (4 KB crossing / illegal endian swap fault
-  the channel instead of reaching the bus)
-* CCR endian swap (16/32/64/128-bit)
-* programmable lock-up watchdog (`WD`, `WDSTAT`, `FTR.lockup_err`)
+* hardware AXI protocol protection (an endian swap the data path cannot do
+  faults the channel instead of reaching the bus)
+* CCR endian swap (16/32/64/128-bit, groups wider than the beat)
+* programmable lock-up watchdog (`WD[31:16]`, `WDSTAT`, `FTR.lockup_err`)
+* clock-domain crossings reset on both sides when either domain is reset
 * per-channel bus-error address registers (`FARn`)
 * AMBA Q-Channel low-power interface (`qreqn/qacceptn/qdeny/qactive`)
 * optional APB error response (`APB_SLVERR`)
@@ -27,6 +34,7 @@ Documentation (`docs/`):
 | [TESTCASES.md](docs/TESTCASES.md) | Test case specification for every test |
 | [CMODEL.md](docs/CMODEL.md) | C reference model through DPI-C: architecture, event protocol, modelled semantics, random-program generator (Vietnamese) |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Short architecture overview (English) |
+| [SDC_CONSTRAINTS.md](docs/SDC_CONSTRAINTS.md) | Synthesis / STA constraints: clocks (aclk 800 MHz, pclk 200 MHz), CDC timing strategy and derivation, I/O budgets (Vietnamese) |
 
 ## Directory layout
 
@@ -62,7 +70,8 @@ tb/
   tests/      test library
   tb_top.sv
 sim/        Makefile, run_regression.py, file lists
-docs/       DESIGN_SPEC, VERIFICATION_PLAN, TESTCASES, CMODEL, ARCHITECTURE
+syn/        constraints/axi_dma330.sdc  flat SDC (OpenROAD/OpenSTA, Yosys, DC, Genus)
+docs/       DESIGN_SPEC, VERIFICATION_PLAN, TESTCASES, CMODEL, ARCHITECTURE, SDC_CONSTRAINTS
 ```
 
 ## Running (QuestaSim 10.7c, UVM-1.2)
@@ -108,26 +117,28 @@ registers (`ARCH`).
 |------|---------|
 | dma_reg_test | UVM reset / bit-bash of the register map, IDs, unmapped reads |
 | dma_m2m_aligned_test | aligned 64-bit memory copies |
-| dma_m2m_unaligned_test | any alignment, beat size and burst length on both sides |
+| dma_m2m_unaligned_test | any alignment, beat size and burst length on both sides; bursts across 4 KB |
 | dma_multi_ch_test | all channels concurrently |
 | dma_fixed_addr_test | FIXED (non-incrementing) source or destination |
 | dma_fill_test | DMASTZ zero fill |
 | dma_loop2d_test | nested DMALP, DMAADDH / DMAADNH 2D transfers |
-| dma_periph_test | WFP / LDP / STP / FLUSHP / conditional S-B / DMALPFE + drlast |
+| dma_periph_test | WFP / LDP / STP / FLUSHP / conditional S-B (S = one beat) / DMALPFE + drlast |
 | dma_event_test | DMASEV / DMAWFE ordering, multi-waiter, sticky events |
-| dma_boot_test | manager boots from memory, non-secure channels, dmago_err |
-| dma_fault_test | every fault type, fault isolation, recovery |
+| dma_boot_test | manager boots from memory, non-secure channels, debug instruction while the manager waits, dmago_err |
+| dma_fault_test | every fault type (incl. EXOKAY), fault isolation, recovery |
 | dma_kill_test | DMAKILL while transferring / waiting for peripheral / event |
 | dma_stress_test | all job kinds on all channels under heavy back-pressure |
 | dma_isa_test | DMANOP, DMARMB, DMAADNH on SAR, DMAKILL as program end, nested loops |
-| dma_periph_corner_test | stray flush ack, back-to-back requests (drready=0), request during flush, two channels on one peripheral |
+| dma_periph_corner_test | stray flush ack, back-to-back requests (drready=0), request during flush, two channels on one peripheral, DMAWFP single/burst, flush after an acknowledge, peripheral-only reset |
 | dma_boot_err_test | manager boot instruction-fetch error and recovery |
 | dma_reset_test | system reset in the middle of traffic on all channels, recovery |
-| dma_endian_test | CCR endian swap (16/32/64-bit) on random copies |
+| dma_endian_test | CCR endian swap (16/32/64-bit, also wider than the beat) on random copies |
 | dma_watchdog_test | lock-up watchdog: hung bus abort, report-only mode, no false alarm, disabled |
 | dma_lowpower_test | Q-Channel: accept / deny, core clock gating, wake-up on APB access |
 | dma_rand_prog_test | random instruction streams (loop nests, FIXED/INCR, unaligned, endian swap, address wrap-around); C model is the only predictor |
 | dma_cmodel_mix_test | every job kind plus random streams on a choked AXI slave and slow peripherals; C model cross-check and register compare |
+| dma_mfifo_share_test | shared MFIFO: one channel using most of the pool, waiting for space, load-lock, inter-channel lock-up (abort / report only) |
+| dma_security_test | two APB ports, CR3/CR4, NS thread checks (events, peripherals, CCR prot), NS register view, NS-tagged instruction cache |
 
 ## Coverage
 

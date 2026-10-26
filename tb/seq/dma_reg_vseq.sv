@@ -43,6 +43,9 @@ class dma_reg_vseq extends dma_base_vseq;
     foreach (rm.CSR[n]) begin
       reg_rd(rm.CSR[n], v);
       if (v[3:0] != dma330_pkg::ST_STOPPED) `uvm_error("REGCHK", $sformatf("ch%0d not stopped", n))
+      // CCRn resets to non-secure, non-cacheable single-byte transfers (TRM Table 3-3)
+      reg_rd(rm.CCR[n], v);
+      if (v != 32'h0080_0200) `uvm_error("REGCHK", $sformatf("CCR%0d=0x%08h after reset, 0x00800200 expected", n, v))
     end
 
     // DBGCMD values other than 0 ("execute") are reserved and ignored
@@ -65,6 +68,7 @@ class dma_reg_vseq extends dma_base_vseq;
       end
     end
     check_slverr();
+    check_pclk_reset();
     `uvm_info("REGCHK", "register checks finished", UVM_LOW)
   endtask
 
@@ -82,6 +86,29 @@ class dma_reg_vseq extends dma_base_vseq;
     wr.data = data;
     wr.start(p_sequencer.apb_sqr, this);
     err = wr.slverr;
+  endtask
+
+  // Reset of the APB domain alone (async configuration: both APB bridges are
+  // reset on both sides, so no phantom transfer follows). Done after an odd and
+  // after an even number of transfers on each port, so the toggle handshakes
+  // are in both states. A phantom response/request would corrupt the reads.
+  protected task check_pclk_reset();
+    bit [31:0] v;
+    for (int k = 1; k <= 2; k++) begin
+      repeat (k) begin
+        apb_rd(0, 12'hE0C, v);                       // CR3
+        apb_rd(1, 12'hE0C, v);
+      end
+      vif.pulse_pclk_reset(40);
+      vif.wait_clks(40);
+      apb_rd(0, 12'hE0C, v);
+      if (v != 32'hFFFF) `uvm_error("REGCHK", $sformatf("pclk reset (%0d): S CR3=0x%08h after the reset", k, v))
+      apb_rd(1, 12'hE10, v);
+      if (v != 32'hF)    `uvm_error("REGCHK", $sformatf("pclk reset (%0d): NS CR4=0x%08h after the reset", k, v))
+      apb_rd(0, 12'hFE8, v);
+      if (v != 32'h34)   `uvm_error("REGCHK", $sformatf("pclk reset (%0d): periph_id_2=0x%08h after the reset", k, v))
+    end
+    `uvm_info("REGCHK", "APB-domain-only reset: no phantom transfer", UVM_LOW)
   endtask
 
   protected task check_slverr();

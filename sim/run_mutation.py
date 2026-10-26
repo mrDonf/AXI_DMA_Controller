@@ -11,7 +11,10 @@ The v1.2 mutants (C model, M1..M4) run twice:
   new  : every test with the C model on (cross-check + register compare +
          random instruction streams)
 A mutant that only the 'new' run catches is a gap the generator-based
-environment had. The v1.3 mutants (shared MFIFO, security) only run 'new'.
+environment had. The v1.3 mutants (shared MFIFO, security) and the v1.4
+mutants (DMA-330 conformance fixes, M17..M39: each restores one behaviour the
+TRM review reported) only run 'new'. M37 and M39 need the async configuration
+(the clock-domain crossings): run them with --configs async.
 
 The printed table lists the tests that failed in each run.
 
@@ -112,8 +115,8 @@ MUTANTS = {
     # A non-secure channel may use secure events
     "M13_ns_thread_secure_ev": (
         "rtl/core/dma_channel.sv",
-        "assign ev_bad      = (int'(num5) >= NUM_EVENTS) || (ns && !irq_ns32[num5]);",
-        "assign ev_bad      = (int'(num5) >= NUM_EVENTS);", 1),
+        "assign ev_sec_bad   = !ev_range_bad && ns && !irq_ns32[num5];",
+        "assign ev_sec_bad   = 1'b0;", 1),
     # One DBGINST0 for both ports
     "M14_shared_dbginst0": (
         "rtl/core/dma_regs.sv",
@@ -129,6 +132,124 @@ MUTANTS = {
         "rtl/core/dma_regs.sv",
         "assign mgr_vis = !acc_n || dsr[9];",
         "assign mgr_vis = 1'b1;", 1),
+
+    # ---- v1.4: DMA-330 conformance fixes (each mutant restores one old behaviour) ----
+    # DMALDS / DMASTS / DMALDPS / DMASTPS move a whole CCR burst
+    "M17_single_full_burst": (
+        "rtl/core/dma_channel.sv",
+        "assign xfer_single = (op[1:0] == 2'b01);",
+        "assign xfer_single = 1'b0;", 1),
+    # The peripheral controller treats every DMAWFP like DMAWFP periph
+    "M18_wfp_kind_ignored": (
+        "rtl/core/dma_channel.sv",
+        "assign wfp_kind     = {wfp_is_burst, wfp_is_periph};",
+        "assign wfp_kind     = 2'b01;", 1),
+    # DMAWFP single / burst copy drlast into request_last
+    "M19_wfp_sb_keeps_last": (
+        "rtl/core/dma_channel.sv",
+        "req_last  <= wfp_is_periph && wfp_last;",
+        "req_last  <= wfp_last;", 1),
+    # A burst that crosses 4 KB is not split
+    "M20_no_4k_split": (
+        "rtl/core/dma330_pkg.sv",
+        "    if (crosses_4k(x.addr, x.size, x.len, x.inc)) begin",
+        "    if (1'b0) begin", 1),
+    # No load-lock: every channel loads whenever its load fits
+    "M21_no_load_lock": (
+        "rtl/core/dma_datapath.sv",
+        "assign may_load[ch]   = !lock_valid || (lock_owner == CH_W'(ch));",
+        "assign may_load[ch]   = 1'b1;", 1),
+    # An MFIFO dead-lock is reported as mfifo_err and ignores WD.irq_only
+    "M22_dlock_as_mfifo_err": (
+        "rtl/core/dma_channel.sv",
+        "    exec_fault[FTC_LOCKUP_ERR] = ld_req && ld_dlock;",
+        "    exec_fault[FTC_MFIFO_ERR]  = ld_req && (ld_lockup || ld_dlock);", 1),
+    # DMAFLUSHP does not wait for the channel's transfers (and acknowledges)
+    "M23_flushp_no_barrier": (
+        "rtl/core/dma_channel.sv",
+        "assign flush_valid  = (state == C_BARRIER) && barrier_fl && dp_idle;",
+        "assign flush_valid  = (state == C_BARRIER) && barrier_fl;", 1),
+    # A non-secure thread may ask for a secure read
+    "M24_ns_secure_read": (
+        "rtl/core/dma_channel.sv",
+        "(ns && !ccr.src_prot[1])",
+        "1'b0", 1),
+    # Instruction-cache lines are not tagged with the security state
+    "M25_icache_no_ns_tag": (
+        "rtl/core/dma_icache.sv",
+        "line_tag[w] == cur_tag && line_ns[w] == cur_ns",
+        "line_tag[w] == cur_tag", 1),
+    # FTRD dmago_err / mgr_evnt_err bit positions swapped
+    "M26_ftrd_bits_swapped": (
+        "rtl/core/dma330_pkg.sv",
+        "  localparam int FTD_DMAGO_ERR       = 4;\n  localparam int FTD_MGR_EVNT_ERR    = 5;",
+        "  localparam int FTD_DMAGO_ERR       = 5;\n  localparam int FTD_MGR_EVNT_ERR    = 4;", 1),
+    # AWCACHE = {0, dst_cache} instead of {dst_cache[2], 0, dst_cache[1:0]}
+    "M27_awcache_old_map": (
+        "rtl/core/dma_channel.sv",
+        "st_xfer.cache      = {ccr.dst_cache[2], 1'b0, ccr.dst_cache[1:0]};",
+        "st_xfer.cache      = {1'b0, ccr.dst_cache};", 1),
+    # Instruction fetches are unprivileged
+    "M28_ifetch_unprivileged": (
+        "rtl/core/dma_icache.sv",
+        "assign ar_prot  = {1'b1, cur_ns, 1'b1};",
+        "assign ar_prot  = {1'b1, cur_ns, 1'b0};", 1),
+    # Old peripheral ID
+    "M29_periph_id_old": (
+        "rtl/top/axi_dma330.sv",
+        "parameter logic [31:0] PERIPH_ID    = 32'h0034_1330,",
+        "parameter logic [31:0] PERIPH_ID    = 32'h0000_0330,", 1),
+    # CCR resets to 0
+    "M30_ccr_reset_zero": (
+        "rtl/core/dma_channel.sv",
+        "ccr           <= ccr_t'(32'h0080_0200);",
+        "ccr           <= '0;", 1),
+    # EXOKAY on R is not an error
+    "M31_rd_exokay_ok": (
+        "rtl/core/dma_rd_engine.sv",
+        "rd_err[r_ch]  = (m_rresp != 2'b00);",
+        "rd_err[r_ch]  = m_rresp[1];", 1),
+    # An endian swap wider than the beat is refused (old rule)
+    "M32_wide_swap_refused": (
+        "rtl/core/dma_channel.sv",
+        "(ccr.dst_inc ? ((st_xfer.bytes[3:0] & swap_mask) != 4'd0)",
+        "(ccr.dst_inc ? (ccr.endian_swap > ccr.dst_burst_size)", 1),
+    # A wide swap group is popped beat by beat (wrong data)
+    "M33_wide_swap_pop_each_beat": (
+        "rtl/core/dma_wr_engine.sv",
+        "mf_pop[act_ch] = w_fire && !act_x.zero && (!grp_mode || grp_last);",
+        "mf_pop[act_ch] = w_fire && !act_x.zero;", 1),
+    # A missing event number is reported as ch_evnt_err
+    "M34_event_range_as_security": (
+        "rtl/core/dma_channel.sv",
+        "assign ev_sec_bad   = !ev_range_bad && ns && !irq_ns32[num5];",
+        "assign ev_sec_bad   = ev_range_bad || (ns && !irq_ns32[num5]);", 1),
+    # Debug instructions are not taken while the manager waits for an event
+    "M35_no_debug_in_wfe": (
+        "rtl/core/dma_manager.sv",
+        "end else if (dbg_valid) begin           // debug instruction while waiting",
+        "end else if (1'b0) begin", 1),
+    # The NS port sees the NS events although the manager is secure
+    "M36_ns_events_secure_mgr": (
+        "rtl/core/dma_regs.sv",
+        "assign ev_vis  = acc_n ? (dsr[9] ? irq_ns : '0) : '1;",
+        "assign ev_vis  = acc_n ? irq_ns : '1;", 1),
+    # The core side of a peripheral synchronizer is reset by aresetn only (the
+    # pre-v1.4 wiring): a peripheral-only reset leaves its toggles out of phase
+    "M37_cdc_periph_core_side": (
+        "rtl/top/axi_dma330.sv",
+        ".rst_n        (p_core_rst_n),",
+        ".rst_n        (core_rst_n),", 1),
+    # Same for the APB bridges: a pclk-only reset leaves the core side alone
+    "M39_cdc_apb_core_side": (
+        "rtl/top/axi_dma330.sv",
+        ".rst_n     (apb_core_rst_n),",
+        ".rst_n     (core_rst_n),", 1),
+    # EXOKAY on B is not an error
+    "M38_wr_exokay_ok": (
+        "rtl/core/dma_wr_engine.sv",
+        "wr_err[b_ch]   = (m_bresp != 2'b00);",
+        "wr_err[b_ch]   = m_bresp[1];", 1),
 }
 
 
@@ -147,6 +268,7 @@ def main():
     ap.add_argument("--work", default=None, help="directory for the mutated copies")
     ap.add_argument("-j", "--jobs", type=int, default=4)
     ap.add_argument("--vopt-j", type=int, default=4)
+    ap.add_argument("--configs", nargs="+", default=["sync"], choices=["sync", "async"])
     args = ap.parse_args()
 
     work = Path(args.work) if args.work else Path(tempfile.mkdtemp(prefix="dma_mut_"))
@@ -174,7 +296,7 @@ def main():
 
         t0 = time.time()
         sim = d / "sim"
-        common = [sys.executable, "run_regression.py", "-c", "sync", "-j", str(args.jobs)]
+        common = [sys.executable, "run_regression.py", "-c", *args.configs, "-j", str(args.jobs)]
         if name in TWO_RUNS:
             out_old = sh([*common, "--vopt-j", str(args.vopt_j), "-t", *OLD_TESTS, "--plusargs", "+NO_CMODEL"],
                          sim, env)

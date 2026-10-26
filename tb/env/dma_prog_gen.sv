@@ -26,7 +26,7 @@ class dma_prog_gen extends uvm_object;
   //============================================================================
   static function void split(bit [31:0] addr, int unsigned nbytes, int unsigned size,
                              int unsigned max_beats, bit inc, dma_op_kind_e kind,
-                             ref dma_op_t ops[$]);
+                             ref dma_op_t ops[$], input bit force_cross = 0);
     int unsigned remaining = nbytes;
     bit [31:0]   a         = addr;
     while (remaining > 0) begin
@@ -39,9 +39,12 @@ class dma_prog_gen extends uvm_object;
       op.addr = a;
       if (inc) begin
         int unsigned page_room = 4096 - (a % 4096);
+        // Half of the bursts may cross a 4 KB boundary: the DMA splits them
+        // into two AXI bursts (TRM 2.10.5), the scoreboard expects both
+        bit          cross_ok  = force_cross || $urandom_range(1);
         k = max_beats;
         if ((remaining + off) / szb < k) k = (remaining + off) / szb;
-        if ((page_room + off) / szb < k) k = (page_room + off) / szb;
+        if (!cross_ok && (page_room + off) / szb < k) k = (page_room + off) / szb;
         if (k >= 1) begin
           op.size = size;  op.len = k - 1;  bytes = k * szb - off;
         end else begin                                // byte-sized leftovers
@@ -129,6 +132,12 @@ class dma_prog_gen extends uvm_object;
   //============================================================================
   static function void build(dma_job job);
     if (job.kind == JOB_RAND) return;           // program already written by dma_rand_prog
+    // A non-secure thread must ask for non-secure accesses (AxPROT[1] = 1),
+    // otherwise it faults with ch_rdwr_err (TRM 3.3.15)
+    if (job.ns) begin
+      job.src_prot[1] = 1'b1;
+      job.dst_prot[1] = 1'b1;
+    end
     job.ops.delete();
     job.exp_acks.delete();
     job.last_on_final = (job.kind inside {JOB_PERIPH_MIXED, JOB_P2M_MIXED});
@@ -151,8 +160,8 @@ class dma_prog_gen extends uvm_object;
   // Memory to memory copy of any length / alignment
   static function void build_m2m(dma_job job);
     dma_op_t lds[$], sts[$];
-    split(job.src, job.nbytes, job.src_size, job.src_beats, job.src_inc, OP_LD, lds);
-    split(job.dst, job.nbytes, job.dst_size, job.dst_beats, job.dst_inc, OP_ST, sts);
+    split(job.src, job.nbytes, job.src_size, job.src_beats, job.src_inc, OP_LD, lds, job.cross_4k);
+    split(job.dst, job.nbytes, job.dst_size, job.dst_beats, job.dst_inc, OP_ST, sts, job.cross_4k);
     interleave(lds, sts, job.ops);
     job.prog.dmamov(RD_SAR, job.src);
     job.prog.dmamov(RD_DAR, job.dst);
@@ -162,7 +171,7 @@ class dma_prog_gen extends uvm_object;
 
   // Zero fill with DMASTZ
   static function void build_fill(dma_job job);
-    split(job.dst, job.nbytes, job.dst_size, job.dst_beats, job.dst_inc, OP_STZ, job.ops);
+    split(job.dst, job.nbytes, job.dst_size, job.dst_beats, job.dst_inc, OP_STZ, job.ops, job.cross_4k);
     job.prog.dmamov(RD_DAR, job.dst);
     emit_ops(job, job.prog, job.ops);
     epilogue(job, job.prog);
@@ -286,10 +295,11 @@ class dma_prog_gen extends uvm_object;
 
   // Peripheral-paced loop until the peripheral flags its last request:
   //   loop: DMAWFP P ; DMALDS ; DMALDB ; DMASTPS ; DMASTPB ; DMALPFE
-  // Exactly one of each S/B pair executes per request.
+  // Exactly one of each S/B pair executes per request: a burst request moves
+  // one CCR burst, a single request one beat (S forms: AxLEN = 0).
   static function void build_periph_mixed(dma_job job);
     int unsigned body;
-    int unsigned bb;
+    int unsigned bb, moved = 0;
     job.src_inc = 1;  job.dst_inc = 0;
     job.dst_size = job.src_size;  job.dst_beats = job.src_beats;
     job.src = job.src & ~32'hFFF;
@@ -300,13 +310,15 @@ class dma_prog_gen extends uvm_object;
     for (int i = 0; i < job.num_req; i++) begin
       dma_periph_pkg::periph_req_e t = ($urandom_range(1) == 1) ? dma_periph_pkg::PREQ_BURST
                                                                : dma_periph_pkg::PREQ_SINGLE;
+      bit single = (t == dma_periph_pkg::PREQ_SINGLE);
       job.req_types.push_back(t);
-      split_one(job, OP_LD, job.src + i * bb, 1);
-      split_one(job, OP_ST, job.dst, 0);
+      split_one(job, OP_LD, job.src + moved, 1, single);
+      split_one(job, OP_ST, job.dst, 0, single);
+      moved += single ? (1 << job.src_size) : bb;
       job.exp_acks.push_back(t == dma_periph_pkg::PREQ_BURST ? dma_periph_pkg::PACK_BURST
                                                              : dma_periph_pkg::PACK_SINGLE);
     end
-    job.nbytes = job.num_req * bb;
+    job.nbytes = moved;
 
     job.prog.dmamov(RD_SAR, job.src);
     job.prog.dmamov(RD_DAR, job.dst);
@@ -328,7 +340,7 @@ class dma_prog_gen extends uvm_object;
   // Read-side acknowledges of both types (single on R for DMALDPS).
   static function void build_p2m_mixed(dma_job job);
     int unsigned body;
-    int unsigned bb;
+    int unsigned bb, moved = 0;
     job.src_inc = 0;  job.dst_inc = 1;
     job.dst_size = job.src_size;  job.dst_beats = job.src_beats;
     job.src = dma_job::fifo_addr(job.periph);
@@ -339,13 +351,15 @@ class dma_prog_gen extends uvm_object;
     for (int i = 0; i < job.num_req; i++) begin
       dma_periph_pkg::periph_req_e t = ($urandom_range(1) == 1) ? dma_periph_pkg::PREQ_BURST
                                                                : dma_periph_pkg::PREQ_SINGLE;
+      bit single = (t == dma_periph_pkg::PREQ_SINGLE);
       job.req_types.push_back(t);
-      split_one(job, OP_LD, job.src, 0);
-      split_one(job, OP_ST, job.dst + i * bb, 1);
+      split_one(job, OP_LD, job.src, 0, single);
+      split_one(job, OP_ST, job.dst + moved, 1, single);
+      moved += single ? (1 << job.dst_size) : bb;
       job.exp_acks.push_back(t == dma_periph_pkg::PREQ_BURST ? dma_periph_pkg::PACK_BURST
                                                              : dma_periph_pkg::PACK_SINGLE);
     end
-    job.nbytes = job.num_req * bb;
+    job.nbytes = moved;
 
     job.prog.dmamov(RD_SAR, job.src);
     job.prog.dmamov(RD_DAR, job.dst);
@@ -362,10 +376,11 @@ class dma_prog_gen extends uvm_object;
     epilogue(job, job.prog);
   endfunction
 
-  // Conditional loop ends. The peripheral sends three single requests:
-  //   DMALP LC1,2 { DMAWFP S ; LD ; STPS } DMALPENDS LC1  -> condition true: 2 passes
-  //   DMALP LC0,4 { DMAWFP S ; LD ; STPS } DMALPENDB LC0  -> condition false: exits
-  //                                                          after the 1st pass
+  // Conditional loop ends. The peripheral sends three single requests; each
+  // pass moves one beat (S forms):
+  //   DMALP LC1,2 { DMAWFP S ; LDS ; STPS } DMALPENDS LC1  -> condition true: 2 passes
+  //   DMALP LC0,4 { DMAWFP S ; LDS ; STPS } DMALPENDB LC0  -> condition false: exits
+  //                                                           after the 1st pass
   static function void build_cond_loop(dma_job job);
     int unsigned body;
     int unsigned bb;
@@ -373,13 +388,13 @@ class dma_prog_gen extends uvm_object;
     job.dst_size = job.src_size;  job.dst_beats = job.src_beats;
     job.src = job.src & ~32'hFFF;
     job.dst = job.dst & ~32'hFFF;
-    bb = job.src_beats << job.src_size;
+    bb = 1 << job.src_size;                               // one beat per request
     job.exp_acks.push_back(dma_periph_pkg::PACK_FLUSH);
     job.req_types.delete();
     for (int i = 0; i < 3; i++) begin
       job.req_types.push_back(dma_periph_pkg::PREQ_SINGLE);
-      split_one(job, OP_LD, job.src + i * bb, 1);
-      split_one(job, OP_ST, job.dst + i * bb, 1);
+      split_one(job, OP_LD, job.src + i * bb, 1, 1);
+      split_one(job, OP_ST, job.dst + i * bb, 1, 1);
       job.exp_acks.push_back(dma_periph_pkg::PACK_SINGLE);
     end
     job.nbytes = 3 * bb;
@@ -391,12 +406,12 @@ class dma_prog_gen extends uvm_object;
     job.prog.dmaflushp(job.periph);
     body = job.prog.dmalp(1, 2);
       job.prog.dmawfp(job.periph, WFP_SINGLE);
-      job.prog.dmald();
+      job.prog.dmald(COND_S);
       job.prog.dmastp(COND_S, job.periph);
     job.prog.dmalpend(1, body, COND_S);
     body = job.prog.dmalp(0, 4);
       job.prog.dmawfp(job.periph, WFP_SINGLE);
-      job.prog.dmald();
+      job.prog.dmald(COND_S);
       job.prog.dmastp(COND_S, job.periph);
     job.prog.dmalpend(0, body, COND_B);
     epilogue(job, job.prog);
@@ -438,13 +453,15 @@ class dma_prog_gen extends uvm_object;
   endfunction
 
   // One op with the job's burst shape
-  static function void split_one(dma_job job, dma_op_kind_e kind, bit [31:0] addr, bit inc);
+  // One CCR burst, or one beat for an S-form instruction (AxLEN = 0)
+  static function void split_one(dma_job job, dma_op_kind_e kind, bit [31:0] addr, bit inc,
+                                 bit single = 0);
     dma_op_t op;
     op.kind = kind;
     op.addr = addr;
     op.inc  = inc;
     op.size = (kind == OP_LD) ? job.src_size      : job.dst_size;
-    op.len  = (kind == OP_LD) ? job.src_beats - 1 : job.dst_beats - 1;
+    op.len  = single ? 0 : ((kind == OP_LD) ? job.src_beats - 1 : job.dst_beats - 1);
     job.ops.push_back(op);
   endfunction
 

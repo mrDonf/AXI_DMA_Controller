@@ -279,11 +279,39 @@ static void test_endian(void)
     }
     dma330_free(m);
 
-    /* 64-bit swap with a 32-bit destination beat is illegal -> ch_rdwr_err */
+    /* 64-bit swap with two INCR 32-bit beats (TRM 2.11.2: len x size is a
+     * multiple of the swap): the 8-byte group spans both beats */
     m = new_model(); p.n = 0;
     p_mov(&p, 0, 0x1000); p_mov(&p, 2, 0x2000); p_mov(&p, 1, ccr(1, 3, 1, 1, 2, 2, 3));
     p_ld(&p, 0); p_st(&p, 0); p_end(&p);
-    CHECK(run(m, &p) == DM_EV_FAULT && (dma330_reg(m, DM_R_FTR) & (1u << 7)), "swap larger than the beat faults");
+    CHECK(run(m, &p) == DM_EV_END, "64-bit swap over two 32-bit beats is legal");
+    st = nth(DM_EV_ST, 0);
+    CHECK(st->strb[0] == 0x0F && st->strb[1] == 0xF0, "beat strobes 0x0F, 0xF0");
+    for (k = 0; k < 8; k++) {
+        unsigned b = k / 4, lane = k;                          /* DAR 0x2000: beat 0 lanes 0-3, beat 1 lanes 4-7 */
+        CHECK(st->data[b][lane] == mem_byte(0x1000 + (7 - k)), "group byte %u", k);
+    }
+    dma330_free(m);
+
+    /* ... but one 32-bit beat holds half a group: illegal -> ch_rdwr_err */
+    m = new_model(); p.n = 0;
+    p_mov(&p, 0, 0x1000); p_mov(&p, 2, 0x2000); p_mov(&p, 1, ccr(1, 3, 1, 1, 2, 1, 3));
+    p_ld(&p, 0); p_st(&p, 0); p_end(&p);
+    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 7), "half a swap group faults");
+    dma330_free(m);
+
+    /* FIXED destination: the beat must hold whole groups */
+    m = new_model(); p.n = 0;
+    p_mov(&p, 0, 0x1000); p_mov(&p, 2, 0x2000); p_mov(&p, 1, ccr(1, 3, 1, 0, 2, 2, 3));
+    p_ld(&p, 0); p_st(&p, 0); p_end(&p);
+    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 7), "FIXED beat narrower than the swap faults");
+    dma330_free(m);
+
+    /* swap wider than the 8-byte bus: configuration limit */
+    m = new_model(); p.n = 0;
+    p_mov(&p, 0, 0x1000); p_mov(&p, 2, 0x2000); p_mov(&p, 1, ccr(1, 3, 2, 1, 3, 2, 4));
+    p_ld(&p, 0); p_st(&p, 0); p_end(&p);
+    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 7), "128-bit swap on a 64-bit bus faults");
     dma330_free(m);
 
     /* DAR not aligned to the swap group */
@@ -339,6 +367,45 @@ static void test_conditions(void)
     CHECK(nth(DM_EV_ACK, 3)->e.ack == DM_ACK_BURST, "request 3 (burst) -> STPB ack");
     CHECK(nth(DM_EV_ACK, 1)->e.periph == 1, "ack goes to P1");
     CHECK(dma330_reg(m, DM_R_DAR) == 0x4000, "FIXED destination does not move");
+    /* S forms move one beat (AxLEN = 0), B forms the CCR burst */
+    CHECK(nth(DM_EV_LD, 0)->e.len == 1 && nth(DM_EV_LD, 1)->e.len == 0 && nth(DM_EV_LD, 2)->e.len == 1,
+          "LDB 2 beats, LDS 1 beat (len %u %u %u)", nth(DM_EV_LD, 0)->e.len, nth(DM_EV_LD, 1)->e.len,
+          nth(DM_EV_LD, 2)->e.len);
+    CHECK(nth(DM_EV_ST, 1)->e.len == 0 && nth(DM_EV_ST, 1)->e.bytes == 8, "STPS 1 beat of 8 bytes");
+    CHECK(dma330_reg(m, DM_R_SAR) == 0x1000 + 16 + 8 + 16, "SAR advanced by 16 + 8 + 16");
+    dma330_free(m);
+}
+
+/* DMAWFP single / burst (TRM 2.6.5) */
+static void test_wfp_kinds(void)
+{
+    dma330_t* m = new_model();
+    prog_t p = {{0}, 0};
+    /* P0 raises: single, burst */
+    static const unsigned r_sb[2][3] = { {0, 0, 0}, {0, 1, 1} };
+    /* P0 raises: burst(last) */
+    static const unsigned r_b[1][3]  = { {0, 1, 1} };
+    printf("DMAWFP single / burst / periph\n");
+
+    /* WFP burst discards the single request and keeps waiting, then takes the
+     * burst one (request_type burst): LDB/STB run, LDS/STS are NOPs. The
+     * second WFP burst finds no request and starves */
+    p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 2, 0x2000); p_mov(&p, 1, ccr(1, 3, 2, 1, 3, 2, 0));
+    p_wfp(&p, 0, 2); p_ld(&p, 3); p_st(&p, 3); p_ld(&p, 1); p_st(&p, 1); p_wfp(&p, 0, 2); p_end(&p);
+    set_reqs(2, r_sb);
+    CHECK(run(m, &p) == DM_EV_STARVED, "second DMAWFP B starves (kind %d)", (int)g_last);
+    CHECK(count(DM_EV_LD) == 1 && nth(DM_EV_LD, 0)->e.len == 1, "one burst load: the single request was dropped");
+
+    /* WFP single with a burst request pending: continues as single, the
+     * burst request stays for the following DMAWFP periph */
+    p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 2, 0x2000); p_mov(&p, 1, ccr(1, 3, 2, 1, 3, 2, 0));
+    p_wfp(&p, 0, 0); p_ld(&p, 1); p_st(&p, 1); p_ld(&p, 3); p_st(&p, 3);
+    p_wfp(&p, 0, 1); p_ld(&p, 3); p_st(&p, 3); p_end(&p);
+    set_reqs(1, r_b);
+    CHECK(run(m, &p) == DM_EV_END, "ends (kind %d)", (int)g_last);
+    CHECK(count(DM_EV_LD) == 2 && nth(DM_EV_LD, 0)->e.len == 0 && nth(DM_EV_LD, 1)->e.len == 1,
+          "single (WFP S) then burst (WFP P) on the same request");
+    set_reqs(0, r_b);
     dma330_free(m);
 }
 
@@ -431,27 +498,30 @@ static void test_faults(void)
     p.n = 0; put(&p, 0xBC); put(&p, 3); put(&p, 0); put(&p, 0); put(&p, 0); put(&p, 0);
     CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == 2, "DMAMOV register 3: operand_invalid");
 
+    /* numbers the configuration does not have: invalid operand (FTR bit 1) */
     p.n = 0; p_sev(&p, 16);
-    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 5), "event 16 of 16: ch_evnt_err");
+    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 1), "event 16 of 16: operand_invalid");
     p.n = 0; p_sev(&p, 15); p_end(&p);
     CHECK(run(m, &p) == DM_EV_END, "event 15 is legal");
 
     p.n = 0; p_wfp(&p, 4, 2);
-    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 6), "DMAWFP P4 of 4: ch_periph_err");
+    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 1), "DMAWFP P4 of 4: operand_invalid");
     p.n = 0; p_flushp(&p, 5);
-    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 6), "DMAFLUSHP P5: ch_periph_err");
+    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 1), "DMAFLUSHP P5: operand_invalid");
     p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 1, ccr(1, 3, 1, 1, 3, 1, 0)); p_ldp(&p, 0, 6);
-    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 6), "DMALDP P6: ch_periph_err");
+    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 1), "DMALDP P6: operand_invalid");
 
-    p.n = 0; p_mov(&p, 0, 0x1FF8); p_mov(&p, 1, ccr(1, 3, 2, 1, 3, 2, 0)); p_ld(&p, 0);
-    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 7), "INCR load across 4 KB: ch_rdwr_err");
+    /* A burst crossing 4 KB is legal: the data path splits it in two AXI
+     * bursts (the model reports the instruction's burst) */
+    p.n = 0; p_mov(&p, 0, 0x1FF8); p_mov(&p, 1, ccr(1, 3, 2, 1, 3, 2, 0)); p_ld(&p, 0); p_end(&p);
+    CHECK(run(m, &p) == DM_EV_END, "INCR load across 4 KB is legal");
+    CHECK(count(DM_EV_LD) == 1 && nth(DM_EV_LD, 0)->e.addr == 0x1FF8 && nth(DM_EV_LD, 0)->e.len == 1,
+          "one LD event of 2 beats from 0x1FF8");
+    CHECK(dma330_reg(m, DM_R_SAR) == 0x2008, "SAR advanced across the boundary");
     p.n = 0; p_mov(&p, 0, 0x1FF8); p_mov(&p, 1, ccr(0, 3, 4, 1, 3, 2, 0)); p_ld(&p, 0); p_end(&p);
     CHECK(run(m, &p) == DM_EV_END, "FIXED burst never crosses");
-    /* the rule uses the beat-aligned start: 0x1FFC -> 0x1FF8 */
-    p.n = 0; p_mov(&p, 0, 0x1FFC); p_mov(&p, 1, ccr(1, 3, 1, 1, 3, 1, 0)); p_ld(&p, 0); p_end(&p);
-    CHECK(run(m, &p) == DM_EV_END, "one 8-byte beat from 0x1FFC ends at 0x1FFF: legal");
-    p.n = 0; p_mov(&p, 0, 0x1FFC); p_mov(&p, 1, ccr(1, 3, 2, 1, 3, 2, 0)); p_ld(&p, 0);
-    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 7), "two beats from 0x1FFC reach 0x2007: crosses");
+    p.n = 0; p_mov(&p, 0, 0x1FFC); p_mov(&p, 1, ccr(1, 3, 2, 1, 3, 2, 0)); p_ld(&p, 0); p_end(&p);
+    CHECK(run(m, &p) == DM_EV_END && nth(DM_EV_LD, 0)->e.bytes == 12, "unaligned crossing load: 12 bytes");
     p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 1, ccr(1, 4, 1, 1, 3, 1, 0)); p_ld(&p, 0);
     CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 7), "burst wider than the 8-byte bus");
 
@@ -466,12 +536,19 @@ static void test_faults(void)
     p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 2, 0x2000); p_mov(&p, 1, ccr(1, 3, 2, 1, 3, 3, 0)); p_ld(&p, 0); p_st(&p, 0);
     CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 13), "24-byte store, 16 loaded");
 
-    /* both a 4 KB crossing and a lock-up: only the other fault is reported */
+    /* both a 4 KB crossing (legal) and a lock-up: mfifo_err */
     p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 1, ccr(1, 3, 16, 1, 3, 16, 0)); p_ld(&p, 0); p_ld(&p, 0);
     p_mov(&p, 0, 0x1F80 + 0x40); p_ld(&p, 0);
     CHECK(run(m, &p) == DM_EV_FAULT, "faults");
-    CHECK(dma330_reg(m, DM_R_FTR) == (1u << 7) && dma330_reg(m, DM_R_FTR_MAYBE) == 0,
-          "rdwr only, no mfifo_err (FTR=%x maybe=%x)", dma330_reg(m, DM_R_FTR), dma330_reg(m, DM_R_FTR_MAYBE));
+    CHECK(dma330_reg(m, DM_R_FTR) == (1u << 12) && dma330_reg(m, DM_R_FTR_MAYBE) == 0,
+          "mfifo_err only (FTR=%x maybe=%x)", dma330_reg(m, DM_R_FTR), dma330_reg(m, DM_R_FTR_MAYBE));
+
+    /* store cache attributes: CCR[27:25] -> AWCACHE[3,1,0], AWCACHE[2] = 0 */
+    p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 2, 0x2000);
+    p_mov(&p, 1, ccr(1, 3, 1, 1, 3, 1, 0) | (7u << 25) | (5u << 11)); p_ld(&p, 0); p_st(&p, 0); p_end(&p);
+    CHECK(run(m, &p) == DM_EV_END, "ends");
+    CHECK(nth(DM_EV_LD, 0)->e.cache == 5 && nth(DM_EV_ST, 0)->e.cache == 0xB,
+          "ARCACHE 0x5, AWCACHE 0xB (got 0x%x 0x%x)", nth(DM_EV_LD, 0)->e.cache, nth(DM_EV_ST, 0)->e.cache);
 
     /* a condition that is false never faults */
     p.n = 0; p_mov(&p, 2, 0x2000); p_mov(&p, 1, ccr(1, 3, 16, 1, 3, 16, 0)); p_st(&p, 3); p_end(&p);
@@ -540,8 +617,17 @@ static void test_security(void)
     CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 6), "NS thread, DMAWFP P2 (secure): ch_periph_err");
     p.n = 0; p_flushp(&p, 3);
     CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 6), "NS thread, DMAFLUSHP P3: ch_periph_err");
-    p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 1, ccr(1, 3, 1, 1, 3, 1, 0)); p_ldp(&p, 0, 2);
+    p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 1, ccr(1, 3, 1, 1, 3, 1, 0) | (2u << 8)); p_ldp(&p, 0, 2);
     CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 6), "NS thread, DMALDP P2: ch_periph_err");
+    /* a non-secure thread may not ask for a secure access (prot[1] = 0) */
+    p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 1, ccr(1, 3, 1, 1, 3, 1, 0)); p_ld(&p, 0);
+    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 7), "NS thread, secure read: ch_rdwr_err");
+    p.n = 0; p_mov(&p, 2, 0x2000); p_mov(&p, 1, ccr(1, 3, 1, 1, 3, 1, 0) | (2u << 8)); p_stz(&p);
+    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 7), "NS thread, secure write: ch_rdwr_err");
+    p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 2, 0x2000);
+    p_mov(&p, 1, ccr(1, 3, 1, 1, 3, 1, 0) | (2u << 8) | (2u << 22)); p_ld(&p, 0); p_st(&p, 0); p_end(&p);
+    CHECK(run(m, &p) == DM_EV_END, "NS thread, non-secure accesses");
+    CHECK(nth(DM_EV_LD, 0)->e.prot == 2 && nth(DM_EV_ST, 0)->e.prot == 2, "AxPROT = CCR prot");
 
     g_ns = 0;
     p.n = 0; p_sev(&p, 9); p_flushp(&p, 3); p_end(&p);
@@ -584,6 +670,7 @@ int main(void)
     test_loops();
     test_endian();
     test_conditions();
+    test_wfp_kinds();
     test_ldp_ack_order();
     test_loop_conditions();
     test_zero_and_regs();

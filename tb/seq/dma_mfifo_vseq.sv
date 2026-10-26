@@ -7,14 +7,22 @@
 //   2. Waiting for space: channel A holds 7/8 of the pool and waits for an
 //      event; channel B's second load does not fit. B waits (no fault) until
 //      A is released and drains, then both copies complete.
-//   3. Deadlock: A holds 6/8 of the pool and waits for an event, B fills the
-//      rest and waits for space. When A wakes up and loads again, no line can
-//      ever be freed: both channels fault with mfifo_err, their lines return
-//      to the pool and every channel works again. A third channel C, running,
-//      whose stream was emptied at an odd byte offset, holds no line (it gave
-//      its last one back): it also waits for space, is not part of the
+//   3. Deadlock: A holds 6/8 of the pool and waits for an event (giving the
+//      load-lock up), B fills the rest, keeps the load-lock and waits for
+//      space. When A wakes up and loads again it waits for the load-lock: no
+//      line can ever be freed. The precise lock-up detection aborts both
+//      channels with lockup_err (WD.irq_only = 0), their lines return to the
+//      pool and every channel works again. A third channel C, running, whose
+//      stream was emptied at an odd byte offset, holds no line (it gave its
+//      last one back): it also waits (for the load-lock), is not part of the
 //      deadlock, does not fault and completes once A and B are gone.
-// The programs are hand-written; the scoreboard ignores the two channels and
+//   4. The same dead-lock with WD.irq_only = 1: it is only reported (WDSTAT
+//      bits of A and B, irq_abort), no channel aborts; DMAKILL ends it.
+//   5. Load-lock (TRM 2.11.4): three channels, each loading more than half
+//      of the pool before its first store (static 0 + dynamic > 1/2 pool:
+//      fits the TRM rule). Without the load-lock their loads interleave and
+//      dead-lock; with it they run one after another and all complete.
+// The programs are hand-written; the scoreboard ignores the channels and
 // the copies are checked in the memory model.
 //==============================================================================
 class dma_mfifo_vseq extends dma_base_vseq;
@@ -167,7 +175,7 @@ class dma_mfifo_vseq extends dma_base_vseq;
   endtask
 
   //----------------------------------------------------------------------------
-  // 3. Deadlock between two channels: both fault with mfifo_err
+  // 3. Deadlock between two channels: both abort with lockup_err
   //----------------------------------------------------------------------------
   protected task deadlock();
     int unsigned   na = POOL_BURSTS - 2;
@@ -223,15 +231,15 @@ class dma_mfifo_vseq extends dma_base_vseq;
       int unsigned ch = (i == 0) ? a_ch : b_ch;
       bit [31:0]   pc = (i == 0) ? a_ld_pc : pc_of(b_ch) + 20;
       reg_rd(rm.FTR[ch], v);
-      if (v != (1 << dma330_pkg::FTC_MFIFO_ERR))
-        `uvm_error("MFIFO", $sformatf("deadlock: ch%0d FTR=0x%08h, mfifo_err only expected", ch, v))
+      if (v != (1 << dma330_pkg::FTC_LOCKUP_ERR))
+        `uvm_error("MFIFO", $sformatf("deadlock: ch%0d FTR=0x%08h, lockup_err only expected", ch, v))
       p_sequencer.cov.sample_fault(v, 0);
       reg_rd(rm.CPC[ch], v);
       if (v != pc) `uvm_error("MFIFO", $sformatf("deadlock: ch%0d CPC=0x%08h, expected 0x%08h", ch, v, pc))
     end
     reg_rd(rm.FSRC, v);
     if (v != ((1 << a_ch) | (1 << b_ch))) `uvm_error("MFIFO", $sformatf("deadlock: FSRC=0x%0h", v))
-    `uvm_info("MFIFO", "deadlock detected: both channels faulted with mfifo_err", UVM_LOW)
+    `uvm_info("MFIFO", "deadlock detected: both channels aborted with lockup_err", UVM_LOW)
 
     // C was not part of the deadlock: it completes on the freed lines
     finish(c_ch);
@@ -249,6 +257,82 @@ class dma_mfifo_vseq extends dma_base_vseq;
   endtask
 
   //----------------------------------------------------------------------------
+  // 4. Dead-lock reported only (WD.irq_only = 1)
+  //----------------------------------------------------------------------------
+  protected task deadlock_irq_only();
+    int unsigned   na = POOL_BURSTS - 2;
+    dma330_asm     a = prologue(src_of(a_ch), dst_of(a_ch));
+    dma330_asm     b = prologue(src_of(b_ch), dst_of(b_ch));
+    bit [31:0]     a_ld_pc;
+    uvm_reg_data_t v;
+
+    repeat (na) a.dmald();
+    a.dmawfe(EV_GO);
+    a_ld_pc = pc_of(a_ch) + a.pc();
+    a.dmald();
+    repeat (na + 1) a.dmast();
+    a.dmaend();
+    b.dmald(); b.dmald(); b.dmald();
+    repeat (3) b.dmast();
+    b.dmaend();
+
+    reg_wr(rm.WD, 32'h0000_0001);                         // irq_only, no time-out
+    load_prog(a_ch, a);
+    load_prog(b_ch, b);
+    start_channel(a_ch, pc_of(a_ch));
+    wait_ch_status(a_ch, dma330_pkg::ST_WAIT_EVENT);
+    start_channel(b_ch, pc_of(b_ch));
+    check_waiting(b_ch, pc_of(b_ch) + 20, "irq_only: before the deadlock");
+    dbg_exec(1, a_ch, '{8'h34, 8'(EV_GO << 3)});
+    wait_abort();
+    reg_rd(rm.WDSTAT, v);
+    if (v != ((1 << a_ch) | (1 << b_ch)))
+      `uvm_error("MFIFO", $sformatf("irq_only deadlock: WDSTAT=0x%0h, channels %0d and %0d expected", v, a_ch, b_ch))
+    reg_rd(rm.FSRC, v);
+    if (v != 0) `uvm_error("MFIFO", $sformatf("irq_only deadlock: FSRC=0x%0h, no abort expected", v))
+    reg_rd(rm.CPC[a_ch], v);
+    if (v != a_ld_pc) `uvm_error("MFIFO", $sformatf("irq_only deadlock: A CPC=0x%08h, 0x%08h expected", v, a_ld_pc))
+    `uvm_info("MFIFO", "deadlock with WD.irq_only = 1: reported in WDSTAT, nothing aborted", UVM_LOW)
+
+    kill_channel(a_ch);
+    kill_channel(b_ch);
+    wait_ch_status(a_ch, dma330_pkg::ST_STOPPED);
+    wait_ch_status(b_ch, dma330_pkg::ST_STOPPED);
+    reg_wr(rm.WDSTAT, (1 << a_ch) | (1 << b_ch));
+    reg_wr(rm.WD, 0);
+    vif.wait_clks(10);
+    if (vif.irq_abort !== 1'b0) `uvm_error("MFIFO", "irq_abort still set after DMAKILL + WDSTAT clear")
+    p_sequencer.sb.ignore_channel(a_ch, 0);
+    p_sequencer.sb.ignore_channel(b_ch, 0);
+  endtask
+
+  //----------------------------------------------------------------------------
+  // 5. Load-lock: three channels that do not fit together
+  //----------------------------------------------------------------------------
+  protected task load_lock();
+    int unsigned n = POOL_BURSTS / 2 + 1;
+    int unsigned chs [3] = '{a_ch, b_ch, c_ch};
+    foreach (chs[i]) begin
+      dma330_asm a = prologue(src_of(chs[i]) + 32'h2000, dst_of(chs[i]) + 32'h2000);
+      repeat (n) a.dmald();
+      repeat (n) a.dmast();
+      a.dmawmb();
+      a.dmasev(chs[i]);
+      a.dmaend();
+      load_prog(chs[i], a);
+    end
+    foreach (chs[i]) start_channel(chs[i], pc_of(chs[i]));
+    fork
+      finish(a_ch);
+      finish(b_ch);
+      finish(c_ch);
+    join
+    foreach (chs[i])
+      check_copy($sformatf("ch%0d load-lock (%0d of %0d bursts)", chs[i], n, POOL_BURSTS),
+                 src_of(chs[i]) + 32'h2000, dst_of(chs[i]) + 32'h2000, n * BURST);
+  endtask
+
+  //----------------------------------------------------------------------------
   virtual task body();
     reg_wr(rm.INTEN, (1 << dma_tb_params_pkg::NUM_CH) - 1);
 
@@ -256,6 +340,8 @@ class dma_mfifo_vseq extends dma_base_vseq;
     big_copy(b_ch, 3, 5);
     wait_for_space();
     deadlock();
+    deadlock_irq_only();
+    load_lock();
 
     // The pool is empty again: every channel works, and one channel alone can
     // again use most of it

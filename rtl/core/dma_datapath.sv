@@ -25,22 +25,32 @@
 //
 //   need      = lines a DMALD of 'bytes' adds:
 //               ceil((res_off + bytes) / NB) - (res_off != 0)
-//   DMALD accepted   when sum(held) + need <= MFIFO_LINES; one DMALD per
-//                    cycle, round robin over the channels whose load fits
+//   DMALD accepted   when sum(held) + need <= MFIFO_LINES and the channel may
+//                    load (load-lock below); one DMALD per cycle, round robin
+//                    over the channels whose load is admissible
 //   DMAST data short when bytes > unclaimed -> channel fault
 //                    (st_data_unavailable); DMASTZ needs no data.
 //
 // A channel whose stream is empty (reserved = 0) gives its last, partly used
 // line back at once and restarts at offset 0, so an idle channel holds no line.
 //
-// Lock-up (fault mfifo_err) of a DMALD that does not fit, while the channel has
-// no store pending that could free its own lines ("stuck"):
-//   * self lock-up : held + need > MFIFO_LINES (it would not fit even in an
-//                    otherwise empty pool)
-//   * deadlock     : every channel holding lines is stuck, so no line can ever
-//                    be freed. All stuck channels that hold lines fault; their
-//                    lines return to the pool.
-// A load that does not fit only because other channels hold lines waits.
+// Load-lock (TRM 2.11.4): only the owner of the load-lock may load. A channel
+// takes the free lock when one of its DMALDs is accepted and keeps it until
+// it gives it up (ll_release: DMAST*, DMARMB/DMAWMB, DMAWFP/DMAWFE, DMAEND,
+// abort). Other channels pause at their DMALD meanwhile. A program set whose
+// static + largest dynamic MFIFO requirement fits the pool never locks up.
+//
+// Lock-up of a DMALD that cannot be accepted (no space, or another channel
+// owns the lock), while the channel has no store pending that could free its
+// own lines ("stuck"):
+//   * self lock-up (ld_lockup -> mfifo_err): held + need > MFIFO_LINES, the
+//                    load would not fit even in an otherwise empty pool
+//   * dead-lock    (ld_dlock -> lockup_err, precise lock-up detection): every
+//                    channel holding lines is stuck, so no line can ever be
+//                    freed. The stuck channels that hold lines are the
+//                    contributing ones; with WD.irq_only = 0 they abort and
+//                    their lines return to the pool.
+// A load blocked only by lines or the lock held by other channels just waits.
 //==============================================================================
 module dma_datapath
   import dma330_pkg::*;
@@ -62,7 +72,9 @@ module dma_datapath
   input  logic [NUM_CH-1:0]   ld_valid,
   input  xfer_t               ld_xfer [NUM_CH],
   output logic [NUM_CH-1:0]   ld_ready,
-  output logic [NUM_CH-1:0]   ld_lockup,
+  output logic [NUM_CH-1:0]   ld_lockup,    // self lock-up (load never fits)
+  output logic [NUM_CH-1:0]   ld_dlock,     // contributes to an MFIFO dead-lock
+  input  logic [NUM_CH-1:0]   ll_release,   // channel gives the load-lock up
   input  logic [NUM_CH-1:0]   st_valid,
   input  xfer_t               st_xfer [NUM_CH],
   output logic [NUM_CH-1:0]   st_ready,
@@ -194,8 +206,10 @@ module dma_datapath
   logic [5:0]          need      [NUM_CH];
   logic [USED_W-1:0]   used;
   logic [NUM_CH-1:0]   rq_push, rq_full, wq_push, wq_full;
-  logic [NUM_CH-1:0]   fits, adm_req, adm_gnt, stuck, holder, self_lock;
+  logic [NUM_CH-1:0]   fits, adm_req, adm_gnt, stuck, holder, self_lock, may_load;
   logic                deadlock;
+  logic                lock_valid;
+  logic [CH_W-1:0]     lock_owner;
 
   always_comb begin
     used = '0;
@@ -210,13 +224,15 @@ module dma_datapath
     // An empty stream gives back its partly used line (no load is accepted
     // for the channel in that cycle, it is retried in the next one)
     assign release_ch[ch] = (reserved[ch] == '0) && (held[ch] != '0);
-    assign adm_req[ch]    = ld_valid[ch] && fits[ch] && !rq_full[ch] && !ch_flush[ch] &&
-                            !release_ch[ch];
+    assign may_load[ch]   = !lock_valid || (lock_owner == CH_W'(ch));
+    assign adm_req[ch]    = ld_valid[ch] && fits[ch] && may_load[ch] && !rq_full[ch] &&
+                            !ch_flush[ch] && !release_ch[ch];
 
-    assign stuck[ch]     = ld_req[ch] && !fits[ch] && !store_pending[ch];
+    assign stuck[ch]     = ld_req[ch] && (!fits[ch] || !may_load[ch]) && !store_pending[ch];
     assign holder[ch]    = (held[ch] != '0) && !release_ch[ch];
     assign self_lock[ch] = (int'(held[ch]) + int'(need[ch])) > MFIFO_LINES;
-    assign ld_lockup[ch] = stuck[ch] && (self_lock[ch] || (deadlock && holder[ch]));
+    assign ld_lockup[ch] = ld_req[ch] && !fits[ch] && !store_pending[ch] && self_lock[ch];
+    assign ld_dlock[ch]  = stuck[ch] && deadlock && holder[ch] && !ld_lockup[ch];
 
     assign st_short[ch]  = !st_xfer[ch].zero &&
                            (int'(st_xfer[ch].bytes) > int'(unclaimed[ch]));
@@ -266,6 +282,19 @@ module dma_datapath
 
   assign ld_ready = adm_gnt;
   assign rq_push  = adm_gnt;            // a grant implies ld_valid
+
+  // Load-lock: taken by an accepted load, given up on ll_release
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      lock_valid <= 1'b0;
+      lock_owner <= '0;
+    end else if (|adm_gnt) begin
+      lock_valid <= 1'b1;
+      lock_owner <= onehot_idx(adm_gnt);
+    end else if (lock_valid && ll_release[lock_owner]) begin
+      lock_valid <= 1'b0;
+    end
+  end
 
   //============================================================================
   // Read engine

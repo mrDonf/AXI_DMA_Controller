@@ -95,13 +95,22 @@ module sva_datapath #(
   input logic [NUM_CH-1:0]                   ld_lockup,
   input logic [NUM_CH-1:0]                   ld_req,
   input logic [NUM_CH-1:0]                   stuck,
-  input logic                                deadlock
+  input logic                                deadlock,
+  input logic [NUM_CH-1:0]                   adm_gnt,
+  input logic [NUM_CH-1:0]                   ld_dlock,
+  input logic                                lock_valid,
+  input logic [$clog2(NUM_CH > 1 ? NUM_CH : 2)-1:0] lock_owner
 );
   default clocking cb @(posedge clk); endclocking
   default disable iff (!rst_n);
 
   DP_POOL_NOT_OVERCOMMITTED: assert property (int'(used) <= MFIFO_LINES);
   DP_LOCKUP_ONLY_ON_LOAD:    assert property ((ld_lockup & ~ld_req) == '0);
+  DP_DLOCK_ONLY_ON_LOAD:     assert property ((ld_dlock & ~ld_req) == '0);
+  // Load-lock: only its owner (or anyone while it is free) loads, one load
+  // per cycle
+  DP_LOADLOCK_OWNER:         assert property (|adm_gnt |-> !lock_valid || adm_gnt[lock_owner]);
+  DP_ONE_LOAD:               assert property ($onehot0(adm_gnt));
 
   for (genvar c = 0; c < NUM_CH; c++) begin : g_ch
     DP_LINES_RESERVED: assert property (disable iff (!rst_n || mf_flush[c])
@@ -110,6 +119,7 @@ module sva_datapath #(
 
   DP_C_WAIT_FOR_SPACE: cover property (|stuck && !deadlock);
   DP_C_DEADLOCK:       cover property (deadlock);
+  DP_C_LOCK_WAIT:      cover property (lock_valid && |(stuck & ~(NUM_CH'(1) << lock_owner)));
 endmodule
 
 //------------------------------------------------------------------------------

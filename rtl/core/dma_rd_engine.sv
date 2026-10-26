@@ -14,6 +14,10 @@
 //                               : --> lane extraction --> channel MFIFO
 //
 // * Instruction fetch has priority on AR (a thread is stalled meanwhile).
+// * A request whose INCR burst crosses a 4 KB boundary is issued as two AXI
+//   bursts (xfer_piece): the queue entry stays at the head until its second
+//   piece has been issued. Each piece gets its own tracker entry.
+// * Any response other than OKAY (EXOKAY, SLVERR, DECERR) is an error.
 // * Data reads use ARID = channel number; R data of one ID returns in order,
 //   different IDs may interleave, so each channel keeps its own beat counter.
 // * Channel flush (kill/fault) discards queued requests and drops returning
@@ -97,7 +101,9 @@ module dma_rd_engine
   // Per-channel Read Queue and Read Tracker
   //============================================================================
   xfer_t              rq_head  [NUM_CH];
+  xfer_t              rq_iss   [NUM_CH];      // AXI burst to issue next
   logic [NUM_CH-1:0]  rq_empty, rq_pop;
+  logic [NUM_CH-1:0]  rq_cross, rq_split;     // head crosses 4 KB / first piece issued
   xfer_t              trk_head [NUM_CH];
   logic [NUM_CH-1:0]  trk_empty, trk_full, trk_push, trk_pop;
   logic [3:0]         beat_cnt [NUM_CH];
@@ -117,13 +123,17 @@ module dma_rd_engine
       .count   ()
     );
 
+    assign rq_cross[ch] = crosses_4k(rq_head[ch].addr, rq_head[ch].size,
+                                     rq_head[ch].len, rq_head[ch].inc);
+    assign rq_iss[ch]   = xfer_piece(rq_head[ch], rq_split[ch]);
+
     // Not flushed: in-flight bursts must always be retired.
     dma_sync_fifo #(.WIDTH(XFER_W), .DEPTH(RD_OUT)) u_trk (
       .clk     (clk),
       .rst_n   (rst_n),
       .flush   (1'b0),
       .push    (trk_push[ch]),
-      .wr_data (rq_head[ch]),
+      .wr_data (rq_iss[ch]),
       .pop     (trk_pop[ch]),
       .rd_data (trk_head[ch]),
       .empty   (trk_empty[ch]),
@@ -162,8 +172,20 @@ module dma_rd_engine
   assign take_ic     = ar_load && ic_ar_valid;                     // fetch first
   assign take_ch     = ar_load && !ic_ar_valid && ch_gnt_valid;
   assign ic_ar_ready = take_ic;
-  assign rq_pop      = take_ch ? ch_gnt : '0;
-  assign trk_push    = rq_pop;      // request moves from queue to tracker
+  assign trk_push    = take_ch ? ch_gnt : '0;           // each AXI burst is tracked
+  // The queue entry leaves with its last (or only) piece
+  assign rq_pop      = trk_push & (~rq_cross | rq_split);
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      rq_split <= '0;
+    end else begin
+      for (int ch = 0; ch < NUM_CH; ch++) begin
+        if (ch_flush[ch] || rq_pop[ch]) rq_split[ch] <= 1'b0;
+        else if (trk_push[ch])          rq_split[ch] <= 1'b1;   // first piece issued
+      end
+    end
+  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -188,12 +210,12 @@ module dma_rd_engine
       end else if (take_ch) begin
         m_arvalid <= 1'b1;
         m_arid    <= ID_W'(ch_gnt_idx);
-        m_araddr  <= rq_head[ch_gnt_idx].addr;
-        m_arlen   <= {4'b0, rq_head[ch_gnt_idx].len};
-        m_arsize  <= rq_head[ch_gnt_idx].size;
-        m_arburst <= rq_head[ch_gnt_idx].inc ? BURST_INCR : BURST_FIXED;
-        m_arcache <= rq_head[ch_gnt_idx].cache;
-        m_arprot  <= rq_head[ch_gnt_idx].prot;
+        m_araddr  <= rq_iss[ch_gnt_idx].addr;
+        m_arlen   <= {4'b0, rq_iss[ch_gnt_idx].len};
+        m_arsize  <= rq_iss[ch_gnt_idx].size;
+        m_arburst <= rq_iss[ch_gnt_idx].inc ? BURST_INCR : BURST_FIXED;
+        m_arcache <= rq_iss[ch_gnt_idx].cache;
+        m_arprot  <= rq_iss[ch_gnt_idx].prot;
       end else begin
         m_arvalid <= 1'b0;
       end
@@ -249,7 +271,7 @@ module dma_rd_engine
     if (r_fire && !r_is_ic) begin
       mf_push[r_ch] = !ch_flush[r_ch];
       trk_pop[r_ch] = m_rlast;
-      rd_err[r_ch]  = m_rresp[1];             // SLVERR / DECERR
+      rd_err[r_ch]  = (m_rresp != 2'b00);     // EXOKAY / SLVERR / DECERR
     end
   end
 

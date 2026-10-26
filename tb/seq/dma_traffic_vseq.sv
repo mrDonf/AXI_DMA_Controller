@@ -11,6 +11,8 @@
 //   endian_mode  : M2M jobs use a random CCR endian swap (16/32/64-bit)
 //   wd_timeout   : enable the watchdog (WD.timeout, x256 clk) during the
 //                  traffic and check that it never reports a false lock-up
+//   cross_4k     : each channel first copies a block that starts just below
+//                  a 4 KB boundary with bursts that cross it (TRM 2.10.5)
 //==============================================================================
 class dma_traffic_vseq extends dma_base_vseq;
 
@@ -24,7 +26,9 @@ class dma_traffic_vseq extends dma_base_vseq;
   int unsigned                        max_bytes    = 2048;
   bit                                 endian_mode  = 0;
   int unsigned                        wd_timeout   = 0;
+  bit                                 cross_4k     = 0;
   protected int unsigned              n_swap [4];  // jobs per endian swap size
+  protected int unsigned              n_swap_wide; // ... with a group wider than the beat
 
   function new(string name = "dma_traffic_vseq");
     super.new(name);
@@ -50,6 +54,8 @@ class dma_traffic_vseq extends dma_base_vseq;
                                      n_swap[0], n_swap[1], n_swap[2], n_swap[3]), UVM_LOW)
       if (n_swap[1] + n_swap[2] + n_swap[3] == 0)
         `uvm_error("TRAFFIC", "endian_mode produced no job with an endian swap")
+      `uvm_info("TRAFFIC", $sformatf("endian swap jobs with a group wider than the beat: %0d", n_swap_wide),
+                UVM_LOW)
     end
 
     if (wd_timeout != 0) begin
@@ -62,6 +68,19 @@ class dma_traffic_vseq extends dma_base_vseq;
   endtask
 
   protected task channel_thread(int unsigned ch);
+    if (cross_4k) begin
+      // 16 x 8-byte bursts from 0x...FC0 (aligned) to 0x...FC5 (unaligned):
+      // the first burst of each side crosses into the next page
+      dma_job job = make_job(ch, JOB_M2M);
+      job.src       = dma_job::src_base(ch) + 32'h0002_0FC0;
+      job.dst       = dma_job::dst_base(ch) + 32'h0002_0FC5;
+      job.nbytes    = 512;
+      job.src_size  = 3;  job.src_beats = 16;  job.src_inc = 1;
+      job.dst_size  = 3;  job.dst_beats = 16;  job.dst_inc = 1;
+      job.swap      = 0;
+      job.cross_4k  = 1;
+      run_job(job);
+    end
     for (int i = 0; i < jobs_per_ch; i++) begin
       dma_job_kind_e kind = kinds[$urandom_range(kinds.size() - 1)];
       dma_job        job  = dma_job::type_id::create($sformatf("job_ch%0d_%0d", ch, i));
@@ -90,17 +109,22 @@ class dma_traffic_vseq extends dma_base_vseq;
             solve swap before dst_size;
             // DMASTZ ignores the endian swap field, even an illegal value
             if (local::endian_mode && kind == JOB_FILL) swap inside {[1:7]};
-            // Endian swap: whole aligned destination beats, group <= beat
+            // Endian swap (TRM 2.11.2): DAR aligned to the group; a group no
+            // wider than the beat, or (INCR) wider: it then spans several
+            // beats and every burst must hold whole groups
             if (local::endian_mode && kind == JOB_M2M) {
               swap dist {1 := 1, 2 := 1, 3 := 1};
-              swap <= dst_size;
               dst % (1 << dst_size) == 0;
+              dst % (1 << swap) == 0;
               nbytes % (1 << dst_size) == 0;
+              nbytes % (1 << swap) == 0;
+              (swap <= dst_size) || (dst_inc && ((dst_beats << dst_size) % (1 << swap) == 0));
             }
           })
         `uvm_fatal("RAND", "job randomize failed")
       job.periph = ch % dma_tb_params_pkg::NUM_PERIPH;
       if (job.kind == JOB_M2M && job.swap < 4) n_swap[job.swap]++;
+      if (job.kind == JOB_M2M && job.swap != 0 && job.swap > job.dst_size) n_swap_wide++;
       run_job(job);
     end
   endtask

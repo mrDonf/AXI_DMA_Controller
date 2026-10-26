@@ -22,7 +22,7 @@ master. A manager thread starts channels (`DMAGO`) either from its own program
 | Register interface          | Secure + non-secure APB ports, DMA-330 compatible register map |
 | Security                    | S/NS manager, channels, events (`CR3`), peripherals (`CR4`); the NS port only sees NS resources |
 | Clock domains               | `aclk` (core + AXI, as DMA-330), APB, one per peripheral (CDC optional) |
-| Robustness                  | AXI protocol guard (4 KB / swap checks), lock-up watchdog, bus-error address (`FARn`) |
+| Robustness                  | 4 KB crossing bursts split in two (as DMA-330), swap legality check, load-lock + precise MFIFO lock-up detection, lock-up watchdog, bus-error address (`FARn`) |
 | Low power                   | AMBA Q-Channel (`qreqn/qacceptn/qdeny/qactive`)     |
 
 ## 2. Block diagram
@@ -91,23 +91,29 @@ any fault ----> FAULT_COMPLETING --> FAULTING --(debug DMAKILL)--> KILLING
   FAULTING until the debugger sends `DMAKILL`.
 
 ### 4.2 Manager thread (`dma_manager`)
-Runs `DMAGO`, `DMASEV`, `DMAWFE`, `DMAFLUSHP`, `DMANOP`, `DMAEND`, `DMAKILL`, from
-memory (`boot_from_pc`) or one at a time from DBGINST0/1. A non-secure
-manager cannot start a secure channel (`dmago_err`) or use a secure event
-(`mgr_evnt_err`). `DMAGO` invalidates the instruction cache so a new program is
-never executed from stale lines.
+Runs `DMAGO`, `DMASEV`, `DMAWFE`, `DMANOP`, `DMAEND`, `DMAKILL` (`DMAFLUSHP` is
+channel only: undefined in the manager), from memory (`boot_from_pc`) or one at
+a time from DBGINST0/1; debug instructions are also taken while the manager
+waits in `DMAWFE` (it then returns to the wait). A non-secure manager cannot
+start a secure channel (`dmago_err`, FTRD[4]) or use a secure event
+(`mgr_evnt_err`, FTRD[5]); a missing channel / event number is
+`operand_invalid`. `DMAGO` invalidates the instruction cache so a new program
+is never executed from stale lines.
 
 ### 4.3 Security
 * Manager: S/NS from `boot_manager_ns` (`DSR.DNS`). Channel: S/NS from the
   `ns` bit of its `DMAGO` (`CSRn.CNS`). Event e: NS when `CR3[e]` = 1, peripheral
   p: NS when `CR4[p]` = 1 (`boot_irq_ns` / `boot_periph_ns`, sampled after reset).
-* A non-secure channel faults on a secure event (`ch_evnt_err`) or peripheral
-  (`ch_periph_err`); NS threads drive `AxPROT[1]` = 1.
+* A non-secure channel faults on a secure event (`ch_evnt_err`), a secure
+  peripheral (`ch_periph_err`) or a secure access requested in CCR
+  (`AxPROT[1]` = 0: `ch_rdwr_err`). NS threads fetch with `ARPROT[1]` = 1 and
+  the instruction cache tags every line with the NS state of its fill.
 * The secure APB port sees everything. The non-secure port reads zero / ignores
-  writes for secure resources (manager, channels, INTEN/RIS/INTCLR bits, WD),
-  has its own DBGINST0/1, and its debug instructions to secure threads are
-  ignored. Simultaneous accesses: the secure port goes first, the NS port waits
-  one cycle.
+  writes for secure resources (manager, channels, WD; INTEN/RIS/INTMIS/INTCLR/
+  FSRC entirely while the manager is secure, TRM Table 3-1, and their secure
+  bits otherwise), has its own DBGINST0/1, and its debug instructions to secure
+  threads are ignored. Simultaneous accesses: the secure port goes first, the
+  NS port waits one cycle.
 
 ## 5. Data path (`dma_datapath`)
 
@@ -119,6 +125,9 @@ never executed from stale lines.
   between IDs** is supported.
 * The valid byte lanes of every beat (narrow / unaligned) are shifted down and
   pushed into the channel's MFIFO stream.
+* An INCR burst that crosses 4 KB is issued as two AR bursts (TRM 2.10.5); the
+  queue entry leaves with its second piece. Any RRESP other than OKAY is an
+  error. `DMALDS`/`DMALDPS` read one beat.
 
 ### 5.2 MFIFO (`dma_mfifo`)
 One pool of `MFIFO_LINES` lines of `DATA_W/8` bytes, **shared by all channels
@@ -138,19 +147,27 @@ Admission control (in `dma_datapath`, per channel):
 | reserved   | DMALD accepted (bytes)  | bytes popped onto W       | an empty stream gives back its last line and restarts at offset 0 |
 | unclaimed  | DMALD accepted          | DMAST accepted            | DMAST needing more data than will ever arrive: `st_data_unavailable` |
 
-`need = ceil((res_off + bytes) / NB) - (res_off != 0)`. One DMALD is accepted
-per cycle, round robin over the channels whose load fits. A load that does not
-fit because other channels hold lines waits. `mfifo_err` is raised for a stuck
-load (does not fit, no store pending) that either never fits even in an empty
-pool (self lock-up) or belongs to a set of channels that all hold lines and are
-all stuck (deadlock: all of them fault and free their lines).
+`need = ceil((res_off + bytes) / NB) - (res_off != 0)`. **Load-lock** (TRM
+2.11.4): only the owner of the load-lock (taken by an accepted DMALD, given up
+on DMAST*, barriers, DMAWFP/DMAWFE, DMAEND, abort) may load; others pause at
+their DMALD. One DMALD is accepted per cycle, round robin over the channels
+whose load fits and may load. A load that cannot be accepted yet waits. A
+stuck load (not accepted, no store pending) that never fits even in an empty
+pool faults with `mfifo_err`; when every channel holding lines is stuck no line
+can ever be freed (precise lock-up detection): the stuck holders abort with
+`lockup_err`, or with `WD.irq_only = 1` are only reported in `WDSTAT` /
+`irq_abort`.
 
 ### 5.3 Write side (`dma_wr_engine`)
 * Per-channel write queue; a burst is **started only when all of its data is
   already in the MFIFO** — W never waits on R, so one slow channel can never
   block the shared W channel (no head-of-line blocking, no deadlock).
 * AW and W of the active burst are driven concurrently; strobes are generated
-  per beat; unused lanes are zero.
+  per beat; unused lanes are zero. 4 KB crossing bursts are split as on the
+  read side; AWCACHE = {CCR[27], 0, CCR[26:25]}; any BRESP other than OKAY is
+  an error.
+* Endian swap groups wider than the beat (INCR, TRM 2.11.2) are reversed from
+  the MFIFO head and popped with their last beat.
 * B responses are matched by BID to a per-channel tracker; `DMASTP` sends its
   peripheral acknowledge when the B response arrives (`DMALDP` on RLAST).
 
@@ -163,10 +180,15 @@ DMA-330 compatible handshake per peripheral:
 | `drvalid/drready` | P → DMA   | request; `drtype` 00 single, 01 burst, 10 flush acknowledge; `drlast` last request |
 | `davalid/daready` | DMA → P   | acknowledge; `datype` 00 single done, 01 burst done, 10 flush request |
 
-`DMAWFP` consumes a latched request and sets the channel's request_type flag
-(used by the `S`/`B` conditional instructions) and the `last` flag (ends a
-`DMALPFE` loop). `DMAFLUSHP` clears the latch, sends a flush request and
-ignores requests until the peripheral acknowledges the flush.
+`DMAWFP periph` consumes the latched request and copies its type into the
+channel's request_type flag (used by the `S`/`B` conditional instructions) and
+its `last` flag (ends a `DMALPFE` loop). `DMAWFP single` continues on any
+request but leaves a burst request latched; `DMAWFP burst` drops single
+requests and waits for a burst one; both set request_last = 0 (TRM 2.6.5).
+`DMAFLUSHP` first waits at a barrier for the channel's transfers (so it never
+overtakes an acknowledge), then clears the latch, sends a flush request and
+ignores requests until the peripheral acknowledges the flush. The S forms of
+DMALD/DMAST/DMALDP/DMASTP move one beat.
 
 ## 7. Register map (APB, 4 KB)
 
@@ -178,10 +200,10 @@ ignores requests until the peripheral acknowledges the flush.
 | 0x030 / 0x034 / 0x038 | FSRD / FSRC / FTRD | fault status / type |
 | 0x040 + 4n      | FTRn             | channel fault type |
 | 0x100 + 8n      | CSRn / CPCn      | channel status / PC |
-| 0x400 + 0x20n   | SARn, DARn, CCRn, LC0_n, LC1_n | |
+| 0x400 + 0x20n   | SARn, DARn, CCRn, LC0_n, LC1_n | CCRn resets to 0x0080_0200 |
 | 0xD00..0xD0C    | DBGSTATUS, DBGCMD, DBGINST0, DBGINST1 | debug instruction interface |
 | 0xE00..0xE14    | CR0..CR4, CRD    | configuration |
-| 0xFE0..0xFFC    | peripheral / component ID | |
+| 0xFE0..0xFFC    | peripheral / component ID | default DMA-330 r1p2: 0x00341330 / 0xB105F00D |
 
 ## 8. Instruction set
 
@@ -192,17 +214,23 @@ DMAWFE DMAWFP<S|B|P> DMAWMB`.
 
 ## 9. Differences from Arm DMA-330
 
+Checked against TRM r1p2 (DDI 0424D). v1.4 fixed every functional difference
+a valid program could see (S-form burst length, DMAWFP single/burst, 4 KB
+split, load-lock, DMAFLUSHP barrier, NS CCR check, NS-tagged I-cache, fault
+codes, AXI attributes, `PERIPH_ID`, CCR reset, EXOKAY). Remaining:
+
 | Item | This design |
 |------|-------------|
-| Clock | Core on `aclk` as DMA-330 (v1.3) |
-| MFIFO | Shared and allocated dynamically as DMA-330 (v1.3); lock-up and inter-channel deadlock reported at once with `mfifo_err` |
-| Security | Two APB ports, `CR3` / `CR4`, event / peripheral checks for NS threads (v1.3). Design choices to check against the TRM: secure resources read as zero on the NS port (no PSLVERR), banked DBGINST0/1, WD secure only |
+| Mid-stream alignment change (TRM 2.11.3) | The MFIFO is a byte stream: no barrier, no data discarded |
+| Unaligned FIXED bursts | Accepted (programming error in the TRM) |
+| Burst size > bus width | `ch_rdwr_err` (TRM: precise abort, bit not named) |
+| NS port with an NS manager | INTEN/RIS/INTMIS/INTCLR/FSRC limited to NS events / channels (stricter than the TRM) |
+| Lock-up | Precise detection per MFIFO line, plus a time-out watchdog (`WD[31:16]`, `WDSTAT`) for hung buses |
 | Write bursts | A write burst starts only when all its data is in the MFIFO |
-| Endian swap (CCR[30:28]) | 16/32/64/128-bit on write data; an illegal setting faults the channel (`ch_rdwr_err`) |
-| Watchdog | `WD[0] irq_only` as DMA-330 plus a programmable `WD[31:16] timeout` and `WDSTAT`; no-progress detection (incl. hung bus) reports `lockup_err` |
-| AXI bursts | Program must not cross 4 KB as for DMA-330; a crossing burst faults the channel instead of reaching the bus |
-| Extensions | `FARn` (0x060+4n), `WDSTAT` (0xE84), Q-Channel, optional `PSLVERR` (`APB_SLVERR`) |
-| Identification | `PERIPH_ID` is a parameter (set it to the PL330 value for the Linux `pl330` driver) |
+| `DMAGO` | Invalidates the whole instruction cache (functionally correct) |
+| Interfaces | AXI4 instead of AXI3 (no WID), ARID all ones for instruction fetches, optional APB async bridge instead of `pclken`, request latch of depth 1 per peripheral |
+| Extensions | `FARn` (0x060+4n), `WDSTAT` (0xE84), `WD[31:16]`, Q-Channel, optional `PSLVERR` (`APB_SLVERR`) |
+| Configuration limits | MFIFO >= 32 lines; I-cache line a power of two >= 8 bytes; swap group <= bus width |
 | Forever loop encoding | `DMALPFE` with S/B condition uses the LC1 encoding (0x29/0x2B decode as DMASTP) |
 
 ## 10. Verification

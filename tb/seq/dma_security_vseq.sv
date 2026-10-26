@@ -9,8 +9,9 @@
 //   * CR3 / CR4 / CR0 read the boot configuration on both ports
 //   * channel registers: a secure channel reads as zero on the NS port, a
 //     non-secure one reads the same on both ports
-//   * INTEN / INT_EVENT_RIS / INTMIS / INTCLR only see the NS events on the
-//     NS port; WD is secure only
+//   * INTEN / INT_EVENT_RIS / INTMIS / INTCLR / FSRC read as zero and ignore
+//     writes on the NS port while the manager is secure (TRM Table 3-1); WD
+//     is secure only
 //   * each port has its own DBGINST0/1; both ports may be busy at once
 //   * the NS port cannot drive secure threads: DMAGO through a secure manager,
 //     DMAKILL / DMASEV to a secure channel are ignored
@@ -18,8 +19,15 @@
 //     DMASEV: ch_evnt_err) and a secure peripheral (DMAWFP, DMAFLUSHP,
 //     DMALDP, DMASTP: ch_periph_err); it may use NS events and peripherals;
 //     a secure thread may use everything
-//   * faults of secure threads are invisible on the NS port
+//   * faults of secure threads are invisible on the NS port; a NS thread
+//     fault is seen in its FTRn on both ports, in FSRC on the secure port
+//   * a non-secure thread faults on a secure access in CCR (ch_rdwr_err)
+//   * the instruction cache keeps secure and non-secure fetches apart: a
+//     secure thread never executes a line a non-secure thread filled from
+//     the same address (secure-only memory reads as zero for NS accesses)
 // Phase 2, non-secure manager (reset with boot_manager_ns = 1)
+//   * the NS port sees and changes only the NS events in INTEN / RIS /
+//     INTMIS / INTCLR
 //   * the NS port starts a non-secure channel and runs a whole job alone
 //   * NS manager faults: DMAGO to a secure channel (dmago_err), DMASEV of a
 //     secure event (mgr_evnt_err); both visible on and cleared from the NS port
@@ -129,13 +137,13 @@ class dma_security_vseq extends dma_base_vseq;
     bit [31:0] v;
     bit [15:0] both = (1 << SEC_EV) | (1 << NS_EV);
 
-    // INTEN: the NS port changes only the NS bits
+    // Secure manager: the NS port neither sees nor changes INTEN
     reg_wr(rm.INTEN, 0);
     apb_wr(1, A_INTEN, 32'hFFFF);
-    apb_rd(0, A_INTEN, v);  expect_eq("S INTEN after NS write 1s", v, 32'(IRQ_NS));
+    apb_rd(0, A_INTEN, v);  expect_eq("S INTEN after NS write 1s", v, 0);
     reg_wr(rm.INTEN, 32'hFFFF);
     apb_wr(1, A_INTEN, 0);
-    apb_rd(0, A_INTEN, v);  expect_eq("S INTEN after NS write 0s", v, {16'h0, ~IRQ_NS});
+    apb_rd(0, A_INTEN, v);  expect_eq("S INTEN after NS write 0s", v, 32'hFFFF);
     apb_rd(1, A_INTEN, v);  expect_eq("NS INTEN", v, 0);
 
     // Raw / masked status and INTCLR
@@ -145,14 +153,15 @@ class dma_security_vseq extends dma_base_vseq;
     wait_irq(SEC_EV);
     wait_irq(NS_EV);
     apb_rd(0, A_RIS, v);     expect_eq("S INT_EVENT_RIS", v, both);
-    apb_rd(1, A_RIS, v);     expect_eq("NS INT_EVENT_RIS", v, 1 << NS_EV);
-    apb_rd(1, A_INTMIS, v);  expect_eq("NS INTMIS", v, 1 << NS_EV);
+    apb_rd(1, A_RIS, v);     expect_eq("NS INT_EVENT_RIS", v, 0);
+    apb_rd(1, A_INTMIS, v);  expect_eq("NS INTMIS", v, 0);
     apb_wr(1, A_INTCLR, 32'hFFFF);
     vif.wait_clks(5);
-    if (vif.irq[NS_EV] !== 1'b0 || vif.irq[SEC_EV] !== 1'b1)
-      `uvm_error("SEC", $sformatf("NS INTCLR of all bits: irq=0x%04h, only the NS one should clear", vif.irq))
-    apb_rd(0, A_RIS, v);     expect_eq("S INT_EVENT_RIS after NS INTCLR", v, 1 << SEC_EV);
+    if (vif.irq[NS_EV] !== 1'b1 || vif.irq[SEC_EV] !== 1'b1)
+      `uvm_error("SEC", $sformatf("NS INTCLR with a secure manager: irq=0x%04h, nothing should clear", vif.irq))
+    apb_rd(0, A_RIS, v);     expect_eq("S INT_EVENT_RIS after NS INTCLR", v, both);
     clear_irq(SEC_EV);
+    clear_irq(NS_EV);
 
     // WD is secure only
     reg_wr(rm.WD, 32'h0010_0001);
@@ -279,8 +288,10 @@ class dma_security_vseq extends dma_base_vseq;
     start_channel(N_CH, pc_of(N_CH), 1);
     wait_abort();
     wait_status_port(1, N_CH, dma330_pkg::ST_FAULTING);
+    apb_rd(0, A_FSRC, v);
+    expect_eq({name, ": S FSRC"}, v, 1 << N_CH);
     apb_rd(1, A_FSRC, v);
-    expect_eq({name, ": NS FSRC"}, v, 1 << N_CH);
+    expect_eq({name, ": NS FSRC with a secure manager"}, v, 0);
     apb_rd(1, a_ftr(N_CH), v);
     if (v != (1 << exp_bit))
       `uvm_error("SEC", $sformatf("%s: NS FTR=0x%08h, only bit %0d expected", name, v, exp_bit))
@@ -291,11 +302,13 @@ class dma_security_vseq extends dma_base_vseq;
     p_sequencer.sb.ignore_channel(N_CH, 0);
   endtask
 
-  protected function dma330_asm prologue();
+  // Non-secure accesses (AxPROT[1] = 1) unless 'secure' is set
+  protected function dma330_asm prologue(bit secure = 0);
     dma330_asm a = dma330_asm::type_id::create("p");
+    bit [2:0]  prot = secure ? 3'b000 : 3'b010;
     a.dmamov(RD_SAR, dma_job::src_base(N_CH));
     a.dmamov(RD_DAR, dma_job::dst_base(N_CH));
-    a.dmamov(RD_CCR, dma330_asm::ccr(1, 3, 2, 1, 3, 2));
+    a.dmamov(RD_CCR, dma330_asm::ccr(1, 3, 2, 1, 3, 2, prot, 0, prot, 0));
     return a;
   endfunction
 
@@ -315,6 +328,13 @@ class dma_security_vseq extends dma_base_vseq;
     ns_thread_fault("DMALDPS of a secure peripheral", a, dma330_pkg::FTC_CH_PERIPH_ERR);
     a = prologue();  a.dmald();  a.dmastp(COND_S, SEC_PERIPH);
     ns_thread_fault("DMASTPS of a secure peripheral", a, dma330_pkg::FTC_CH_PERIPH_ERR);
+    // Secure accesses asked for in CCR (TRM 3.3.15)
+    a = prologue(1);  a.dmald();
+    ns_thread_fault("DMALD with a secure ARPROT", a, dma330_pkg::FTC_CH_RDWR_ERR);
+    a = prologue();
+    a.dmamov(RD_CCR, dma330_asm::ccr(1, 3, 2, 1, 3, 2, 3'b010, 0, 3'b000, 0));
+    a.dmald();  a.dmast();
+    ns_thread_fault("DMAST with a secure AWPROT", a, dma330_pkg::FTC_CH_RDWR_ERR);
 
     // Debug DMASEV of a secure event to a stopped NS channel
     p_sequencer.sb.ignore_channel(N_CH, 1);
@@ -336,12 +356,12 @@ class dma_security_vseq extends dma_base_vseq;
     p_sequencer.sb.add_expected_ack(NS_PERIPH, dma_periph_pkg::PACK_FLUSH);
     start_channel(N_CH, pc_of(N_CH), 1);
     wait_irq(NS_EV);
-    apb_wr(1, A_INTCLR, 1 << NS_EV);
+    clear_irq(NS_EV);                                     // secure manager: secure port
     wait_status_port(1, N_CH, dma330_pkg::ST_STOPPED);
     apb_rd(1, a_ftr(N_CH), v);   expect_eq("NS thread with NS resources: FTR", v, 0);
     dbg_sev(1, N_CH, NS_EV);                              // NS debug DMASEV of a NS event
     wait_irq(NS_EV);
-    apb_wr(1, A_INTCLR, 1 << NS_EV);
+    clear_irq(NS_EV);
 
     // A secure thread may use secure and non-secure resources
     a = dma330_asm::type_id::create("p");
@@ -403,11 +423,71 @@ class dma_security_vseq extends dma_base_vseq;
   endtask
 
   //----------------------------------------------------------------------------
+  // Instruction cache: secure and non-secure lines are separate. The program
+  // sits in secure-only memory (an NS read returns zeros = DMAEND):
+  //   secure ch S : DMAWFE E1 ; DMASEV E2 ; DMAEND     (waits in DMAWFE)
+  //   NS ch N     : same address -> fetches zeros, ends at once; its DMAGO
+  //                 empties every line buffer, its fetch fills an NS line
+  //   wake S      : S fetches DMASEV again; it must miss the NS line
+  //----------------------------------------------------------------------------
+  protected task icache_ns_tag();
+    localparam bit [31:0]   X  = 32'h00F0_0000;
+    localparam int unsigned E1 = 4, E2 = 5;
+    dma330_asm a = dma330_asm::type_id::create("p");
+    bit [31:0] v;
+
+    a.dmawfe(E1);
+    a.dmasev(E2);
+    a.dmaend();
+    p_sequencer.cfg.mem.write_bytes(X, a.code);
+    p_sequencer.sb.add_prog_region(X, a.code.size());
+    p_sequencer.cov.sample_program(a.code);
+    p_sequencer.cfg.axi_cfg.add_ns_raz_region(X, X + 32'hFF);
+    reg_wr(rm.INTEN, 1 << E2);
+
+    start_channel(S_CH, X, 0);
+    wait_ch_status(S_CH, dma330_pkg::ST_WAIT_EVENT);
+    start_channel(N_CH, X, 1);
+    wait_ch_status(N_CH, dma330_pkg::ST_STOPPED);
+    apb_rd(0, a_cpc(N_CH), v);   expect_eq("NS thread on secure-only code: CPC (DMAEND of zeros)", v, X);
+    dbg_exec(0, 0, '{8'h34, 8'(E1 << 3)});                // secure manager wakes S
+    wait_irq(E2);
+    clear_irq(E2);
+    wait_ch_status(S_CH, dma330_pkg::ST_STOPPED);
+    apb_rd(0, a_cpc(S_CH), v);   expect_eq("secure thread: CPC at its own DMAEND", v, X + 4);
+    apb_rd(0, a_ftr(S_CH), v);   expect_eq("secure thread: FTR", v, 0);
+
+    p_sequencer.cfg.axi_cfg.clear_ns_raz_regions();
+    reg_wr(rm.INTEN, 32'hFFFF);
+    `uvm_info("SEC", "i-cache: secure thread did not run the line a non-secure fetch filled", UVM_LOW)
+  endtask
+
+  //----------------------------------------------------------------------------
   // Phase 2: non-secure manager
   //----------------------------------------------------------------------------
   protected task ns_manager();
     dma_job    job = make_job(N_CH, JOB_M2M);
     bit [31:0] v;
+    bit [15:0] both = (1 << SEC_EV) | (1 << NS_EV);
+
+    // Non-secure manager: the NS port sees and changes only the NS events
+    reg_wr(rm.INTEN, 0);
+    apb_wr(1, A_INTEN, 32'hFFFF);
+    apb_rd(0, A_INTEN, v);  expect_eq("NS manager: S INTEN after NS write 1s", v, 32'(IRQ_NS));
+    apb_rd(1, A_INTEN, v);  expect_eq("NS manager: NS INTEN", v, 32'(IRQ_NS));
+    reg_wr(rm.INTEN, both);
+    dbg_sev(0, S_CH, SEC_EV);                             // secure-port debug DMASEV
+    dbg_sev(0, S_CH, NS_EV);
+    wait_irq(SEC_EV);
+    wait_irq(NS_EV);
+    apb_rd(1, A_RIS, v);     expect_eq("NS manager: NS INT_EVENT_RIS", v, 1 << NS_EV);
+    apb_rd(1, A_INTMIS, v);  expect_eq("NS manager: NS INTMIS", v, 1 << NS_EV);
+    apb_wr(1, A_INTCLR, 32'hFFFF);
+    vif.wait_clks(5);
+    if (vif.irq[NS_EV] !== 1'b0 || vif.irq[SEC_EV] !== 1'b1)
+      `uvm_error("SEC", $sformatf("NS INTCLR of all bits: irq=0x%04h, only the NS one should clear", vif.irq))
+    clear_irq(SEC_EV);
+    reg_wr(rm.INTEN, 0);
 
     // A whole job driven from the NS port only
     job.ns = 1;
@@ -475,6 +555,7 @@ class dma_security_vseq extends dma_base_vseq;
     ns_debug_ignored();
     ns_thread_faults();
     secure_faults_hidden();
+    icache_ns_tag();
 
     // Phase 2: reset with a non-secure manager
     `uvm_info("SEC", "reset with boot_manager_ns = 1", UVM_LOW)

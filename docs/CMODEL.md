@@ -109,11 +109,12 @@ Tất cả theo `DESIGN_SPEC.md` (mục 4.5, 4.7, 5.9, 7). Đối chiếu với 
 |---|---|
 | Giải mã | Bảng opcode và độ dài lệnh của `dma330_pkg::decode_op/insn_len`, gồm các mã `DMALPEND`/`DMALPFE` (`0x38–0x3F`, `0x2C–0x2F`, `0x28`, `0x2A`) và quy tắc `0x29/0x2B` luôn là `DMASTP` |
 | Số byte burst | `INCR: (len+1)·2^size − off`; `FIXED: (len+1)·(2^size − off)` |
-| `DMALD`/`DMAST` | `SAR`/`DAR += bytes` nếu INCR; địa chỉ beat, lane và strobe theo quy tắc AXI beat hẹp / không align |
+| `DMALD`/`DMAST` | `SAR`/`DAR += bytes` nếu INCR; địa chỉ beat, lane và strobe theo quy tắc AXI beat hẹp / không align. Dạng `S` (`op[1:0] = 01`: `DMALDS`, `DMASTS`, `DMALDPS`, `DMASTPS`) là một beat (`len = 0`). Model báo burst của lệnh; việc tách burst vượt 4 KB thành hai burst AXI do scoreboard làm (`split_4k`) |
+| Thuộc tính AXI | `prot` = `CCR.x_prot`; `cache`: đọc `{0, src_cache}`, ghi `{dst_cache[2], 0, dst_cache[1:0]}` (`AWCACHE[3,1,0]`) |
 | Dòng dữ liệu | Byte của `LD` nối vào một stream; `ST` lấy từ đầu stream; `STZ` không lấy |
-| Endian swap | Chỉ với `ST`/`STP` (không với `STZ`): đảo byte trong từng nhóm `2^swap` đã align của beat |
+| Endian swap | Chỉ với `ST`/`STP` (không với `STZ`): đảo byte trong từng nhóm `2^swap` byte liên tiếp của burst (nhóm có thể trải trên nhiều beat hẹp) |
 | Điều kiện `S`/`B` | So bit 1 của opcode với `request_type`; sai thì như `DMANOP` |
-| `DMAWFP` | Lấy request kế của peripheral; `request_type` = loại request nếu `P`, ngược lại theo hậu tố `S`/`B`; ghi `request_last` |
+| `DMAWFP` | `P`: lấy request kế, `request_type`/`request_last` theo request. `S`: đi tiếp với request bất kỳ, chỉ lấy request single (request burst ở lại), `request_type = single`, `request_last = 0`. `B`: bỏ các request single, lấy request burst, `request_type = burst`, `request_last = 0` |
 | `DMAFLUSHP` | Ack `FLUSH`, xóa `request_type` và `request_last` |
 | Vòng lặp | `DMALP` nạp `LCx = n−1`; `DMALPEND`: nếu `LCx ≠ 0` giảm và lùi `jump`, ngược lại đi tiếp; `DMALPFE` lùi tới khi `request_last`; điều kiện sai thì đi tiếp |
 | `DMAADDH/ADNH` | Cộng `{0000, imm16}` hoặc `{FFFF, imm16}` theo modulo 2³² |
@@ -123,13 +124,15 @@ Tất cả theo `DESIGN_SPEC.md` (mục 4.5, 4.7, 5.9, 7). Đối chiếu với 
 
 Model tính đúng các điều kiện của bảng 5.9 (`undef_instr`, `operand_invalid`, `ch_evnt_err`, `ch_periph_err`, `ch_rdwr_err`, `mfifo_err`, `st_data_unavailable`) tại đúng lệnh gây lỗi; CPC là địa chỉ lệnh đó.
 
-* Thread non-secure (`dma330_go(..., ns = 1)`): event secure trong `DMASEV`/`DMAWFE` → `ch_evnt_err`; peripheral secure trong `DMAWFP`/`DMAFLUSHP`/`DMALDP`/`DMASTP` → `ch_periph_err` (đặc tả 4.5).
+* Số event/peripheral ≥ `num_events`/`num_periph` → `operand_invalid`.
+* Thread non-secure (`dma330_go(..., ns = 1)`): event secure trong `DMASEV`/`DMAWFE` → `ch_evnt_err`; peripheral secure trong `DMAWFP`/`DMAFLUSHP`/`DMALDP`/`DMASTP` → `ch_periph_err`; `DMALD`/`DMAST`/`DMASTZ` khi `CCR` yêu cầu truy cập secure (`x_prot[1] = 0`) → `ch_rdwr_err` (đặc tả 4.5).
+* `ch_rdwr_err` khác: burst size > bus; endian swap không thực hiện được (nhóm > bus, `DAR` không align, INCR không chứa trọn nhóm, FIXED beat hẹp hơn nhóm). Burst vượt 4 KB không phải lỗi.
 * `mfifo_err` (self lock-up, kênh chạy một mình trong pool dùng chung). Sau khi các store đã issue xả hết, kênh giữ các line chứa byte chưa store; với lệnh load này nó cần `ceil((off + unclaimed + bytes) / NB)` line, trong đó `off` là offset trong line của byte cũ nhất. Stream rỗng không giữ line nào (một load luôn vừa) và có thể bắt đầu lại ở offset 0, tùy thời điểm store xả xong. Model giữ tập các offset có thể có (`off_mask`: xoay theo số byte mỗi store, thêm 0 mỗi khi stream rỗng):
   * mọi offset đều vượt `mfifo_bytes / NB` line → `mfifo_err` chắc chắn;
   * chỉ một số offset vượt → kết quả phụ thuộc thời gian, model báo `UNSURE` (bộ sinh chương trình ngẫu nhiên loại bỏ chương trình đó);
   * với chương trình mà mọi store có số byte là bội của `NB` (thường gặp) tập này chỉ có offset 0, nên không bao giờ `UNSURE`.
 * Lock-up chỉ được báo khi lệnh load không có lỗi khác (như datapath: `ld_req` chỉ bật khi lệnh không có lỗi khác). Vì vậy không còn trường hợp "bit 12 có thể có" (`ftr_maybe = 0`).
-* Model không mô hình các kênh khác: chờ chỗ trống và deadlock giữa nhiều kênh (`dma_mfifo_share_test`) nằm ngoài model. Bộ sinh chương trình ngẫu nhiên giữ mỗi kênh dưới `MFIFO_LINES/NUM_CH` line dữ liệu chưa store, nên không có chờ hay deadlock giữa các kênh.
+* Model không mô hình các kênh khác: load-lock, chờ chỗ trống và dead-lock giữa nhiều kênh (`lockup_err`, `dma_mfifo_share_test`) nằm ngoài model. Bộ sinh chương trình ngẫu nhiên giữ mỗi kênh dưới `MFIFO_LINES/NUM_CH` line dữ liệu chưa store, nên không có dead-lock giữa các kênh (load-lock chỉ làm thay đổi thời điểm).
 * Lỗi bus (`RRESP`/`BRESP`/fetch) và watchdog là bất đồng bộ, **không** thuộc phạm vi model.
 * Sau lỗi, traffic của các burst đã issue trước đó là không xác định (hàng đợi bị flush), nên chỉ kiểm `FTR`/`CPC`, không kiểm traffic.
 
@@ -189,7 +192,7 @@ Chạy riêng test độc lập (không cần simulator):
 gcc -O2 -Wall -Wextra -o dma330_ref_test model/dma330_ref_test.c model/dma330_ref.c && ./dma330_ref_test
 ```
 
-`dma330_ref_test` có 147 kiểm tra known-answer, mọi giá trị kỳ vọng tính tay từ đặc tả (copy align và không align, FIXED, vòng lặp lồng, endian swap, `S`/`B`, `DMALPFE`, ack, fault, quay vòng 32 bit, giao thức `NEED_CODE`/`STARVED`/`RUNAWAY`, lock-up MFIFO theo line và `UNSURE`, security event/peripheral của thread NS).
+`dma330_ref_test` có 173 kiểm tra known-answer, mọi giá trị kỳ vọng tính tay từ đặc tả (copy align và không align, FIXED, vòng lặp lồng, endian swap, `S`/`B`, `DMALPFE`, ack, fault, quay vòng 32 bit, giao thức `NEED_CODE`/`STARVED`/`RUNAWAY`, lock-up MFIFO theo line và `UNSURE`, security event/peripheral/`CCR` của thread NS; lệnh `S` một beat, `DMAWFP S/B/P`, burst vượt 4 KB hợp lệ, swap rộng hơn beat, `AWCACHE`, `operand_invalid` cho số event/peripheral sai).
 
 ---
 

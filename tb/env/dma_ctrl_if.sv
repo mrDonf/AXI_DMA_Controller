@@ -17,6 +17,8 @@ interface dma_ctrl_if #(
   logic [NUM_EVENTS-1:0] boot_irq_ns;       // CR3: events usable by non-secure threads
   logic [31:0]           boot_periph_ns;    // CR4: peripherals usable by non-secure threads
   logic                  sw_rst_n;          // test-controlled reset (ANDed into rst_n)
+  logic [31:0]           periph_sw_rst_n;   // reset of one peripheral domain only
+  logic                  pclk_sw_rst_n;     // reset of the APB (pclk) domain only
 
   // Q-Channel (controller side) and core clock enable
   logic                  qreqn;
@@ -32,6 +34,8 @@ interface dma_ctrl_if #(
     boot_irq_ns     = '1;                   // default: every event / peripheral
     boot_periph_ns  = '1;                   // usable by both worlds
     sw_rst_n        = 1'b1;
+    periph_sw_rst_n = '1;
+    pclk_sw_rst_n   = 1'b1;
     qreqn           = 1'b1;
     clk_en          = 1'b1;
   end
@@ -64,6 +68,24 @@ interface dma_ctrl_if #(
     #1 sw_rst_n = 1'b0;
     repeat (n) @(posedge clk);
     #1 sw_rst_n = 1'b1;
+  endtask
+
+  // Reset peripheral domain 'p' alone (its interface and the DMA's
+  // periph_rst_n[p]) for 'n' core clocks; the rest of the system keeps running
+  task automatic pulse_periph_reset(int unsigned p, int unsigned n);
+    @(posedge clk);
+    #1 periph_sw_rst_n[p] = 1'b0;
+    repeat (n) @(posedge clk);
+    #1 periph_sw_rst_n[p] = 1'b1;
+  endtask
+
+  // Reset the APB domain alone (presetn of both ports and of the DUT) for
+  // 'n' core clocks; the core keeps running
+  task automatic pulse_pclk_reset(int unsigned n);
+    @(posedge clk);
+    #1 pclk_sw_rst_n = 1'b0;
+    repeat (n) @(posedge clk);
+    #1 pclk_sw_rst_n = 1'b1;
   endtask
 
   // Wait for 'n' core clocks

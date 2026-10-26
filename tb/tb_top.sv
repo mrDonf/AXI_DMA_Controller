@@ -56,15 +56,18 @@ module tb_top;
   //============================================================================
   // Interfaces
   //============================================================================
-  apb_if #(32, 32)                 apb    (.pclk(pclk), .presetn(rst_n));   // secure port
-  apb_if #(32, 32)                 apb_ns (.pclk(pclk), .presetn(rst_n));   // non-secure port
+  logic prst_n;                     // APB-domain reset (system reset AND test pclk reset)
+  assign prst_n = rst_n && ctrl.pclk_sw_rst_n;
+
+  apb_if #(32, 32)                 apb    (.pclk(pclk), .presetn(prst_n));  // secure port
+  apb_if #(32, 32)                 apb_ns (.pclk(pclk), .presetn(prst_n));  // non-secure port
   axi_if #(ID_W, 32, DATA_W)       axi    (.aclk(aclk), .aresetn(rst_n));
   dma_ctrl_if #(NUM_EVENTS)        ctrl   (.clk(aclk), .rst_n(rst_n));
 
   // One interface per peripheral, explicitly on its own clock. (An instance
   // array would map periph_clk[NUM_PERIPH-1] to per[0].)
   for (genvar p = 0; p < NUM_PERIPH; p++) begin : g_per
-    dma_periph_if per (.clk(periph_clk[p]), .rst_n(rst_n));
+    dma_periph_if per (.clk(periph_clk[p]), .rst_n(rst_n && ctrl.periph_sw_rst_n[p]));
   end
 
   //============================================================================
@@ -96,7 +99,6 @@ module tb_top;
     .MFIFO_LINES  (MFIFO_LINES),
     .IC_LINES     (IC_LINES),
     .IC_BEATS     (IC_BEATS),
-    .PERIPH_ID    (PERIPH_ID),
     .APB_ASYNC    (ASYNC),
     .PERIPH_ASYNC (ASYNC),
     .APB_SLVERR   (ASYNC)        // async snapshot also checks PSLVERR reporting
@@ -104,9 +106,9 @@ module tb_top;
     .aclk            (dut_aclk),
     .aresetn         (rst_n),
     .pclk            (pclk),
-    .presetn         (rst_n),
+    .presetn         (prst_n),
     .periph_clk      (periph_clk),
-    .periph_rst_n    ({NUM_PERIPH{rst_n}}),
+    .periph_rst_n    ({NUM_PERIPH{rst_n}} & ctrl.periph_sw_rst_n[NUM_PERIPH-1:0]),
     .boot_from_pc    (ctrl.boot_from_pc),
     .boot_addr       (ctrl.boot_addr),
     .boot_manager_ns (ctrl.boot_manager_ns),
@@ -186,20 +188,20 @@ module tb_top;
   );
 
   apb_slave_sva #(.ADDR_W(12), .DATA_W(32), .SLVERR_EN(ASYNC)) u_apb_sva (
-    .pclk (pclk), .presetn (rst_n), .psel (apb.psel), .penable (apb.penable),
+    .pclk (pclk), .presetn (prst_n), .psel (apb.psel), .penable (apb.penable),
     .pwrite (apb.pwrite), .paddr (apb.paddr[11:0]), .pwdata (apb.pwdata),
     .pready (apb.pready), .prdata (apb.prdata), .pslverr (apb.pslverr)
   );
 
   apb_slave_sva #(.ADDR_W(12), .DATA_W(32), .SLVERR_EN(ASYNC)) u_apb_ns_sva (
-    .pclk (pclk), .presetn (rst_n), .psel (apb_ns.psel), .penable (apb_ns.penable),
+    .pclk (pclk), .presetn (prst_n), .psel (apb_ns.psel), .penable (apb_ns.penable),
     .pwrite (apb_ns.pwrite), .paddr (apb_ns.paddr[11:0]), .pwdata (apb_ns.pwdata),
     .pready (apb_ns.pready), .prdata (apb_ns.prdata), .pslverr (apb_ns.pslverr)
   );
 
   for (genvar p = 0; p < NUM_PERIPH; p++) begin : g_per_sva
     dma_periph_sva u_per_sva (
-      .clk (periph_clk[p]), .rst_n (rst_n),
+      .clk (periph_clk[p]), .rst_n (rst_n && ctrl.periph_sw_rst_n[p]),
       .drvalid (drvalid[p]), .drready (drready[p]), .drtype (drtype[p]), .drlast (drlast[p]),
       .davalid (davalid[p]), .daready (daready[p]), .datype (datype[p])
     );

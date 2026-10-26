@@ -15,6 +15,7 @@ class dma_fault_vseq extends dma_base_vseq;
   localparam bit [31:0]   ERR_RD     = 32'hE000_0000;   // SLVERR on reads
   localparam bit [31:0]   ERR_WR     = 32'hE001_0000;   // DECERR on writes
   localparam bit [31:0]   ERR_FETCH  = 32'hE002_0000;   // SLVERR on instruction fetch
+  localparam bit [31:0]   ERR_EXOK   = 32'hE003_0000;   // EXOKAY (DMA never asks for it)
   // Instruction fetch errors that hit only part of what a thread fetches
   localparam bit [31:0]   STRADDLE   = 32'h0003_8000;   // error line after a good one
   localparam bit [31:0]   LAST_BEAT  = 32'h0003_9000;   // last beat of a line errors
@@ -29,7 +30,7 @@ class dma_fault_vseq extends dma_base_vseq;
   //----------------------------------------------------------------------------
   protected task run_fault(string name, dma330_asm a, int unsigned exp_bit,
                            bit [31:0] start_pc = 0, bit check_cpc = 0,
-                           bit [31:0] exp_far = 0);
+                           bit [31:0] exp_far = 0, bit exact = 0);
     uvm_reg_data_t v;
     bit [31:0]     pc = dma_job::prog_base(victim) + 32'h4000;
     if (start_pc != 0) pc = start_pc;
@@ -49,6 +50,8 @@ class dma_fault_vseq extends dma_base_vseq;
     reg_rd(rm.FTR[victim], v);
     if (!v[exp_bit])
       `uvm_error("FAULT", $sformatf("%s: FTR=0x%08h, bit %0d expected", name, v, exp_bit))
+    else if (exact && v != (32'd1 << exp_bit))
+      `uvm_error("FAULT", $sformatf("%s: FTR=0x%08h, only bit %0d expected", name, v, exp_bit))
     else
       `uvm_info("FAULT", $sformatf("%s: FTR=0x%08h as expected", name, v), UVM_LOW)
     p_sequencer.cov.sample_fault(v, 0);
@@ -102,6 +105,7 @@ class dma_fault_vseq extends dma_base_vseq;
     p_sequencer.cfg.axi_cfg.add_err_region(ERR_RD,    ERR_RD + 32'hFFFF,    axi_pkg::AXI_SLVERR, 1, 0);
     p_sequencer.cfg.axi_cfg.add_err_region(ERR_WR,    ERR_WR + 32'hFFFF,    axi_pkg::AXI_DECERR, 0, 1);
     p_sequencer.cfg.axi_cfg.add_err_region(ERR_FETCH, ERR_FETCH + 32'hFFFF, axi_pkg::AXI_SLVERR, 1, 0);
+    p_sequencer.cfg.axi_cfg.add_err_region(ERR_EXOK,  ERR_EXOK + 32'hFFFF,  axi_pkg::AXI_EXOKAY, 1, 1);
     p_sequencer.sb.add_prog_region(ERR_FETCH, 64);
     p_sequencer.cfg.axi_cfg.add_err_region(STRADDLE,          STRADDLE + 32'hFF,   axi_pkg::AXI_SLVERR, 1, 0);
     p_sequencer.cfg.axi_cfg.add_err_region(LAST_BEAT + 32'h18, LAST_BEAT + 32'h1F, axi_pkg::AXI_SLVERR, 1, 0);
@@ -125,11 +129,12 @@ class dma_fault_vseq extends dma_base_vseq;
         a.raw(8'hBC); a.raw(8'h03); a.raw(0); a.raw(0); a.raw(0); a.raw(0);
         run_fault("DMAMOV bad register", a, dma330_pkg::FTC_OPERAND_INVALID);
 
+        // Numbers the configuration does not have: invalid operand
         a = dma330_asm::type_id::create("p");  a.dmasev(20);
-        run_fault("event number too large", a, dma330_pkg::FTC_CH_EVNT_ERR);
+        run_fault("event number too large", a, dma330_pkg::FTC_OPERAND_INVALID, 0, 0, 0, 1);
 
         a = dma330_asm::type_id::create("p");  a.dmawfp(7, WFP_BURST);
-        run_fault("peripheral number too large", a, dma330_pkg::FTC_CH_PERIPH_ERR);
+        run_fault("peripheral number too large", a, dma330_pkg::FTC_OPERAND_INVALID, 0, 0, 0, 1);
 
         a = prologue(src, dst, dma330_asm::ccr(1, 4, 1, 1, 3, 1));  a.dmald();
         run_fault("burst size wider than the bus", a, dma330_pkg::FTC_CH_RDWR_ERR);
@@ -149,11 +154,18 @@ class dma_fault_vseq extends dma_base_vseq;
         a = dma330_asm::type_id::create("p");  a.dmanop();
         run_fault("instruction fetch error", a, dma330_pkg::FTC_INSTR_FETCH_ERR, ERR_FETCH, 0, ERR_FETCH);
 
+        // EXOKAY to a non-exclusive access is an error response too (TRM 3.3.10)
+        a = prologue(ERR_EXOK, dst, ccr8x16);  a.dmald(); a.dmast(); a.dmawmb(); a.dmaend();
+        run_fault("read EXOKAY", a, dma330_pkg::FTC_DATA_READ_ERR, 0, 0, ERR_EXOK);
+
+        a = prologue(src, ERR_EXOK + 32'h100, ccr8x16);  a.dmald(); a.dmast(); a.dmawmb(); a.dmaend();
+        run_fault("write EXOKAY", a, dma330_pkg::FTC_DATA_WRITE_ERR, 0, 0, ERR_EXOK + 32'h100);
+
         a = prologue(src, dst, ccr8x16);  a.dmaldp(COND_S, 9);
-        run_fault("DMALDP peripheral number too large", a, dma330_pkg::FTC_CH_PERIPH_ERR);
+        run_fault("DMALDP peripheral number too large", a, dma330_pkg::FTC_OPERAND_INVALID, 0, 0, 0, 1);
 
         a = prologue(src, dst, ccr8x16);  a.dmald(); a.dmastp(COND_S, 9);
-        run_fault("DMASTP peripheral number too large", a, dma330_pkg::FTC_CH_PERIPH_ERR);
+        run_fault("DMASTP peripheral number too large", a, dma330_pkg::FTC_OPERAND_INVALID, 0, 0, 0, 1);
 
         // A 6-byte DMAMOV starting 2 bytes before an erroring line: the first
         // line is fine, the fetch of the second line fails
@@ -169,26 +181,31 @@ class dma_fault_vseq extends dma_base_vseq;
         run_fault("cache refill error on the first beat", a,
                   dma330_pkg::FTC_INSTR_FETCH_ERR, FIRST_BEAT + 8);
 
-        // AXI protocol protection: a burst that would cross a 4 KB boundary
-        // faults the channel; nothing reaches the bus
-        a = prologue(src + 32'hFF8, dst, ccr8x16);  a.dmald();
-        run_fault("load burst crosses 4 KB", a, dma330_pkg::FTC_CH_RDWR_ERR);
-
-        a = prologue(src, dst + 32'hFF0, ccr8x16);  a.dmald(); a.dmast();
-        run_fault("store burst crosses 4 KB", a, dma330_pkg::FTC_CH_RDWR_ERR);
-
-        // Endian swap: group larger than the destination beat, unaligned DAR
-        a = prologue(src, dst, dma330_asm::ccr(1, 3, 2, 1, 2, 4, 0, 0, 0, 0, 3));
+        // Endian swap the data path cannot honour (TRM 2.11.2): an INCR burst
+        // that does not hold whole groups, a FIXED beat narrower than the
+        // group, a group wider than the bus, an unaligned DAR
+        a = prologue(src, dst, dma330_asm::ccr(1, 3, 2, 1, 2, 3, 0, 0, 0, 0, 3));
         a.dmald(); a.dmast();
-        run_fault("endian swap wider than the beat", a, dma330_pkg::FTC_CH_RDWR_ERR);
+        run_fault("endian swap: INCR burst of 12 B, 8-byte groups", a, dma330_pkg::FTC_CH_RDWR_ERR);
+
+        a = prologue(src, dst, dma330_asm::ccr(1, 3, 2, 0, 2, 4, 0, 0, 0, 0, 3));
+        a.dmald(); a.dmast();
+        run_fault("endian swap: FIXED beat narrower than the group", a, dma330_pkg::FTC_CH_RDWR_ERR);
+
+        if (dma_tb_params_pkg::DATA_W < 128) begin
+          a = prologue(src, dst, dma330_asm::ccr(1, 3, 2, 1, 3, 2, 0, 0, 0, 0, 4));
+          a.dmald(); a.dmast();
+          run_fault("endian swap wider than the bus", a, dma330_pkg::FTC_CH_RDWR_ERR);
+        end
 
         a = prologue(src, dst + 2, dma330_asm::ccr(1, 3, 2, 1, 3, 2, 0, 0, 0, 0, 2));
         a.dmald(); a.dmast();
         run_fault("endian swap with unaligned DAR", a, dma330_pkg::FTC_CH_RDWR_ERR);
 
         // Illegal debug instructions sent to a stopped channel
-        debug_channel_fault("debug DMANOP to a channel", '{8'h18});
-        debug_channel_fault("debug DMASEV with a bad event", '{8'h34, 8'(20 << 3)});
+        debug_channel_fault("debug DMANOP to a channel", '{8'h18}, dma330_pkg::FTC_UNDEF_INSTR);
+        debug_channel_fault("debug DMASEV with a bad event", '{8'h34, 8'(20 << 3)},
+                            dma330_pkg::FTC_OPERAND_INVALID);
 
         // A debug instruction for a channel that does not exist is ignored
         dbg_exec(1, 6, '{8'h01});
@@ -203,7 +220,7 @@ class dma_fault_vseq extends dma_base_vseq;
         manager_fault("DMAWFE is not a debug instruction", '{8'h36, 8'h00},
                       dma330_pkg::FTD_UNDEF_INSTR);
         manager_fault("event number too large", '{8'h34, 8'(31 << 3)},
-                      dma330_pkg::FTD_MGR_EVNT_ERR);
+                      dma330_pkg::FTD_OPERAND_INVALID);
       end
     join
 
@@ -227,13 +244,13 @@ class dma_fault_vseq extends dma_base_vseq;
   endtask
 
   // An illegal debug instruction faults the (stopped) victim channel
-  protected task debug_channel_fault(string name, bit [7:0] insn[$]);
+  protected task debug_channel_fault(string name, bit [7:0] insn[$], int unsigned exp_bit);
     uvm_reg_data_t v;
     p_sequencer.sb.ignore_channel(victim, 1);
     dbg_exec(1, victim, insn);
     wait_abort();
     reg_rd(rm.FTR[victim], v);
-    if (!(v[dma330_pkg::FTC_DBG_INSTR] && v[dma330_pkg::FTC_UNDEF_INSTR]))
+    if (!(v[dma330_pkg::FTC_DBG_INSTR] && v[exp_bit]))
       `uvm_error("FAULT", $sformatf("%s: FTR=0x%08h", name, v))
     else
       `uvm_info("FAULT", $sformatf("%s: FTR=0x%08h as expected", name, v), UVM_LOW)

@@ -6,8 +6,14 @@
 // Per peripheral p:
 //   * Request latch  : one pending request {burst, last} accepted from the
 //                      dr interface (drready = no request pending).
-//   * DMAWFP         : the lowest-numbered channel waiting on p consumes the
-//                      pending request.
+//   * DMAWFP         : the lowest-numbered channel waiting on p is served
+//                      with the pending request (TRM 2.6.5):
+//                        periph : request consumed, channel continues
+//                        single : continues; a single request is consumed,
+//                                 a burst request stays pending
+//                        burst  : a burst request is consumed and the
+//                                 channel continues; a single request is
+//                                 discarded and the channel keeps waiting
 //   * Ack queue      : acknowledges sent on the da interface, in order:
 //                        2'b00 single done   (DMALDPS / DMASTPS completed)
 //                        2'b01 burst done    (DMALDPB / DMASTPB completed)
@@ -40,6 +46,7 @@ module dma_periph_ctrl #(
   // DMAWFP from channels
   input  logic [NUM_CH-1:0]      wfp_valid,
   input  logic [4:0]             wfp_periph [NUM_CH],
+  input  logic [1:0]             wfp_kind   [NUM_CH], // {burst, periph}
   output logic [NUM_CH-1:0]      wfp_gnt,
   output logic [NUM_CH-1:0]      wfp_burst,
   output logic [NUM_CH-1:0]      wfp_last,
@@ -68,7 +75,7 @@ module dma_periph_ctrl #(
   logic [NUM_PERIPH-1:0] req_pend, req_burst, req_last, flushing;
 
   // Per-peripheral decisions
-  logic [NUM_PERIPH-1:0] grant_wfp;     // pending request consumed by a channel
+  logic [NUM_PERIPH-1:0] grant_wfp;     // pending request consumed (or discarded)
   logic [NUM_PERIPH-1:0] do_flush;
   logic [NUM_PERIPH-1:0] ackq_push, ackq_full, ackq_empty;
   logic [1:0]            ackq_in [NUM_PERIPH];
@@ -91,14 +98,31 @@ module dma_periph_ctrl #(
       logic flush_req, rd_req, wr_req;
       ackq_in[p] = DA_SINGLE;
 
-      // DMAWFP: first waiting channel gets the pending request
-      for (int ch = 0; ch < NUM_CH; ch++) begin
-        if (!grant_wfp[p] && wfp_valid[ch] && int'(wfp_periph[ch]) == p &&
-            req_pend[p] && !flushing[p]) begin
-          grant_wfp[p]  = 1'b1;
-          wfp_gnt[ch]   = 1'b1;
-          wfp_burst[ch] = req_burst[p];
-          wfp_last[ch]  = req_last[p];
+      // DMAWFP: the first waiting channel is served with the pending request
+      begin
+        logic served;
+        served = 1'b0;
+        for (int ch = 0; ch < NUM_CH; ch++) begin
+          if (!served && wfp_valid[ch] && int'(wfp_periph[ch]) == p &&
+              req_pend[p] && !flushing[p]) begin
+            served        = 1'b1;
+            wfp_burst[ch] = req_burst[p];
+            wfp_last[ch]  = req_last[p];
+            case (wfp_kind[ch])
+              2'b10: begin                                   // DMAWFP burst
+                grant_wfp[p] = 1'b1;
+                wfp_gnt[ch]  = req_burst[p];
+              end
+              2'b00: begin                                   // DMAWFP single
+                grant_wfp[p] = !req_burst[p];
+                wfp_gnt[ch]  = 1'b1;
+              end
+              default: begin                                 // DMAWFP periph
+                grant_wfp[p] = 1'b1;
+                wfp_gnt[ch]  = 1'b1;
+              end
+            endcase
+          end
         end
       end
 

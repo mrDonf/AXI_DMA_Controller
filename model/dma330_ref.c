@@ -267,22 +267,22 @@ static dm_ev_kind_t need_code(dma330_t* m, uint32_t addr)
 /*------------------------------------------------------------------------------
  * Data movement helpers
  *----------------------------------------------------------------------------*/
-static void swap_beat(uint8_t* d, unsigned bus, unsigned swap)
-{
-    uint8_t  t[DM_MAX_BUS_BYTES];
-    unsigned g = 1u << swap, k;
-    if (swap < 1 || swap > 4 || g > bus) return;
-    memcpy(t, d, bus);
-    for (k = 0; k < bus; k++) d[k] = t[k ^ (g - 1)];
-}
-
 /* Bytes of a store burst are taken from the stream and placed on the lanes of
- * each beat; lanes without a strobe carry zero (spec 4.7.4). */
+ * each beat; lanes without a strobe carry zero (spec 4.7.4). An endian swap
+ * of g bytes reverses every group of g consecutive bytes of the burst (DAR is
+ * aligned to g and the burst holds whole groups, see the legality check), so
+ * a group may span several beats narrower than g. */
 static void build_beats(dma330_t* m, uint32_t addr, unsigned size, unsigned len,
                         unsigned inc, unsigned swap, int zero)
 {
     unsigned szb = 1u << size, bus = m->cfg.bus_bytes, nb = len + 1, b, lane, taken = 0;
     uint32_t aligned = addr & ~(szb - 1u);
+    uint8_t  src[DM_MAX_BEATS * DM_MAX_BUS_BYTES];
+    unsigned total = dm_burst_bytes(addr, size, len, inc), g = 1u << swap, i;
+    if (!zero) {
+        for (i = 0; i < total; i++)
+            src[i] = (swap >= 1 && swap <= 4) ? m->stream[i ^ (g - 1u)] : m->stream[i];
+    }
     for (b = 0; b < nb; b++) {
         uint32_t a  = (!inc || b == 0) ? addr : aligned + b * szb;
         unsigned lo = a % bus;
@@ -290,10 +290,10 @@ static void build_beats(dma330_t* m, uint32_t addr, unsigned size, unsigned len,
         memset(m->beat_data[b], 0, DM_MAX_BUS_BYTES);
         m->beat_strb[b] = 0;
         for (lane = lo; lane <= hi; lane++) {
-            m->beat_data[b][lane] = zero ? 0 : m->stream[taken++];
+            m->beat_data[b][lane] = zero ? 0 : src[taken];
+            taken += zero ? 0 : 1;
             m->beat_strb[b] |= 1u << lane;
         }
-        if (!zero) swap_beat(m->beat_data[b], bus, swap);
     }
     if (!zero) {
         unsigned r = taken % bus;
@@ -357,7 +357,8 @@ dm_ev_kind_t dma330_step(dma330_t* m)
         uint8_t  op, b1;
         unsigned len, i, num5, bytes;
         insn_t   cls;
-        int      cond_ok, is_load, is_store, do_xfer, ev_bad, pe_bad, unsure;
+        int      cond_ok, is_load, is_store, do_xfer, unsure, single;
+        int      ev_range, ev_sec, pe_range, pe_sec;
         uint32_t fault, lock;
         uint16_t imm16;
         uint32_t imm32;
@@ -382,11 +383,16 @@ dm_ev_kind_t dma330_step(dma330_t* m)
         is_load  = (cls == I_LD) || (cls == I_LDP);
         is_store = (cls == I_ST) || (cls == I_STP) || (cls == I_STZ);
         do_xfer  = (is_load || is_store) && cond_ok;
+        /* S suffix (op[1:0] = 01): one beat, the CCR burst length is ignored */
+        single   = (is_load || is_store) && (op & 3u) == 1u;
 
-        /* Execute-time faults (dma_channel.sv, exec_fault). A non-secure
+        /* Execute-time faults (dma_channel.sv, exec_fault). A number the
+         * configuration does not have is an invalid operand; a non-secure
          * thread may only use the non-secure events / peripherals (CR3 / CR4). */
-        ev_bad = num5 >= m->cfg.num_events || (m->ns && !((m->irq_ns >> num5) & 1u));
-        pe_bad = num5 >= m->cfg.num_periph || (m->ns && !((m->periph_ns >> num5) & 1u));
+        ev_range = num5 >= m->cfg.num_events;
+        pe_range = num5 >= m->cfg.num_periph;
+        ev_sec   = !ev_range && m->ns && !((m->irq_ns >> num5) & 1u);
+        pe_sec   = !pe_range && m->ns && !((m->periph_ns >> num5) & 1u);
         fault  = 0;
         lock   = 0;
         unsure = 0;
@@ -394,19 +400,30 @@ dm_ev_kind_t dma330_step(dma330_t* m)
         switch (cls) {
         case I_UNDEF: case I_GO:  fault |= FT_UNDEF_INSTR; break;
         case I_MOV:               if (b1 > 2) fault |= FT_OPERAND_INVALID; break;
-        case I_SEV: case I_WFE:   if (ev_bad) fault |= FT_CH_EVNT_ERR; break;
-        case I_WFP: case I_FLUSHP: if (pe_bad) fault |= FT_CH_PERIPH_ERR; break;
+        case I_SEV: case I_WFE:
+            if (ev_range) fault |= FT_OPERAND_INVALID;
+            if (ev_sec)   fault |= FT_CH_EVNT_ERR;
+            break;
+        case I_WFP: case I_FLUSHP:
+            if (pe_range) fault |= FT_OPERAND_INVALID;
+            if (pe_sec)   fault |= FT_CH_PERIPH_ERR;
+            break;
         default: break;
         }
         if (do_xfer) {
-            if ((cls == I_LDP || cls == I_STP) && pe_bad)
-                fault |= FT_CH_PERIPH_ERR;
+            if (cls == I_LDP || cls == I_STP) {
+                if (pe_range) fault |= FT_OPERAND_INVALID;
+                if (pe_sec)   fault |= FT_CH_PERIPH_ERR;
+            }
             if (!VALID(m, DM_R_CCR) || !VALID(m, is_load ? DM_R_SAR : DM_R_DAR))
                 return finish(m, DM_EV_UNKNOWN);
             if (is_load) {
-                unsigned sz = CCR_SRC_SIZE(m->ccr), ln = CCR_SRC_LEN(m->ccr), inc = CCR_SRC_INC(m->ccr);
+                unsigned sz = CCR_SRC_SIZE(m->ccr), inc = CCR_SRC_INC(m->ccr);
+                unsigned ln = single ? 0 : CCR_SRC_LEN(m->ccr);
                 bytes = dm_burst_bytes(m->sar, sz, ln, inc);
-                if (sz > m->max_size || dm_crosses_4k(m->sar, sz, ln, inc)) fault |= FT_CH_RDWR_ERR;
+                /* a non-secure thread may not ask for a secure access */
+                if (sz > m->max_size || (m->ns && !(CCR_SRC_PROT(m->ccr) & 2u)))
+                    fault |= FT_CH_RDWR_ERR;
                 /* MFIFO lock-up (dma_datapath.sv), channel alone in the pool.
                  * Once the stores already issued have drained, the channel
                  * holds the lines of its unclaimed bytes; with this load it
@@ -427,12 +444,17 @@ dm_ev_kind_t dma330_step(dma330_t* m)
                     else if (n_lock)      unsure = 1;
                 }
             } else {
-                unsigned sz = CCR_DST_SIZE(m->ccr), ln = CCR_DST_LEN(m->ccr), inc = CCR_DST_INC(m->ccr);
-                unsigned sw = CCR_SWAP(m->ccr);
-                int swap_bad = (cls != I_STZ) && sw != 0 &&
-                               (sw > 4 || sw > sz || ((m->dar & ((1u << sw) - 1u) & 0xFu) != 0));
+                unsigned sz = CCR_DST_SIZE(m->ccr), inc = CCR_DST_INC(m->ccr);
+                unsigned ln = single ? 0 : CCR_DST_LEN(m->ccr);
+                unsigned sw = CCR_SWAP(m->ccr), gm = (1u << sw) - 1u;
+                int swap_bad;
                 bytes = dm_burst_bytes(m->dar, sz, ln, inc);
-                if (sz > m->max_size || swap_bad || dm_crosses_4k(m->dar, sz, ln, inc))
+                /* Endian swap of g bytes: g within the bus, DAR aligned to g;
+                 * INCR: whole groups per burst, FIXED: per beat (TRM 2.11.2) */
+                swap_bad = (cls != I_STZ) && sw != 0 &&
+                           (sw > 4 || sw > m->max_size || (m->dar & gm & 0xFu) != 0 ||
+                            (inc ? (bytes & gm) != 0 : sw > sz));
+                if (sz > m->max_size || swap_bad || (m->ns && !(CCR_DST_PROT(m->ccr) & 2u)))
                     fault |= FT_CH_RDWR_ERR;
                 if (cls != I_STZ && bytes > m->stream_len) fault |= FT_ST_DATA_UNAVAIL;
             }
@@ -484,15 +506,16 @@ dm_ev_kind_t dma330_step(dma330_t* m)
             memset(&m->ev, 0, sizeof m->ev);
             m->ev.pc = m->pc;
             if (is_load) {
-                addr = m->sar; sz = CCR_SRC_SIZE(m->ccr); ln = CCR_SRC_LEN(m->ccr);
+                addr = m->sar; sz = CCR_SRC_SIZE(m->ccr); ln = single ? 0 : CCR_SRC_LEN(m->ccr);
                 inc = CCR_SRC_INC(m->ccr);
-                m->ev.cache = CCR_SRC_CACHE(m->ccr);
-                m->ev.prot  = CCR_SRC_PROT(m->ccr) | (m->ns ? 2u : 0u);
+                m->ev.cache = CCR_SRC_CACHE(m->ccr);                  /* ARCACHE[2:0]   */
+                m->ev.prot  = CCR_SRC_PROT(m->ccr);
             } else {
-                addr = m->dar; sz = CCR_DST_SIZE(m->ccr); ln = CCR_DST_LEN(m->ccr);
+                unsigned c = CCR_DST_CACHE(m->ccr);
+                addr = m->dar; sz = CCR_DST_SIZE(m->ccr); ln = single ? 0 : CCR_DST_LEN(m->ccr);
                 inc = CCR_DST_INC(m->ccr);
-                m->ev.cache = CCR_DST_CACHE(m->ccr);
-                m->ev.prot  = CCR_DST_PROT(m->ccr) | (m->ns ? 2u : 0u);
+                m->ev.cache = ((c & 4u) << 1) | (c & 3u);             /* AWCACHE[3,1,0] */
+                m->ev.prot  = CCR_DST_PROT(m->ccr);
             }
             szb = 1u << sz;
             off = addr & (szb - 1u);
@@ -548,18 +571,34 @@ dm_ev_kind_t dma330_step(dma330_t* m)
             break;
 
         case I_WFP: {
+            /* TRM 2.6.4 / 2.6.5:
+             *   periph : the request is consumed, request_type / request_last
+             *            follow it
+             *   single : continues; a single request is consumed, a burst one
+             *            stays pending; request_type = single, last = 0
+             *   burst  : single requests are discarded while waiting; a burst
+             *            one is consumed; request_type = burst, last = 0 */
             unsigned kind = op & 3u;                           /* 0 S, 1 P, 2 B */
-            if (m->req_rd[num5] >= m->req_n[num5]) {
-                m->insns--;
-                m->ev.pc = m->pc;
-                m->ev.periph = num5;
-                return finish(m, DM_EV_STARVED);
-            }
-            {
-                unsigned burst = m->req[num5][m->req_rd[num5]].burst;
-                m->req_last = m->req[num5][m->req_rd[num5]].last;
-                m->req_rd[num5]++;
-                m->req_burst = (kind == 1) ? burst : (kind == 2);
+            for (;;) {
+                unsigned burst;
+                if (m->req_rd[num5] >= m->req_n[num5]) {
+                    m->insns--;
+                    m->ev.pc = m->pc;
+                    m->ev.periph = num5;
+                    return finish(m, DM_EV_STARVED);
+                }
+                burst = m->req[num5][m->req_rd[num5]].burst;
+                if (kind == 2 && !burst) { m->req_rd[num5]++; continue; }
+                if (kind == 1) {
+                    m->req_burst = burst;
+                    m->req_last  = m->req[num5][m->req_rd[num5]].last;
+                    m->req_rd[num5]++;
+                } else {
+                    m->req_burst = (kind == 2);
+                    m->req_last  = 0;
+                    if (kind == 2 || !burst) m->req_rd[num5]++;
+                }
+                break;
             }
             m->pc += len;
             break;

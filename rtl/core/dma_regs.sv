@@ -60,7 +60,7 @@ module dma_regs
   parameter int          RD_OUT      = 4,
   parameter int          WR_OUT      = 4,
   parameter int          MFIFO_LINES = 128,
-  parameter logic [31:0] PERIPH_ID   = 32'h0000_0330,
+  parameter logic [31:0] PERIPH_ID   = 32'h0034_1330,   // DMA-330 r1p2 (periph_id_3..0)
   parameter bit          APB_SLVERR  = 1'b0
 ) (
   input  logic                    clk,
@@ -136,6 +136,7 @@ module dma_regs
   output logic [NUM_CH-1:0]       ch_dbg_kill,
   output logic [NUM_CH-1:0]       ch_dbg_fault,
   output logic [NUM_CH-1:0]       ch_dbg_evnt_fault,
+  output logic [NUM_CH-1:0]       ch_dbg_opnd_fault,
   output logic                    dbg_sev_valid,
   output logic [4:0]              dbg_sev_event,
   output logic                    dbg_busy
@@ -254,9 +255,15 @@ module dma_regs
     assign ch_ns[n] = ch_csr[n][21];                  // CSRn.CNS
   end
 
+  // TRM Table 3-1: on the non-secure port the manager registers (DSR, DPC,
+  // FSRD, FTRD) and the interrupt / fault summary registers (INTEN,
+  // INT_EVENT_RIS, INTMIS, INTCLR, FSRC) read as zero / ignore writes while
+  // the manager is secure. With a non-secure manager they are further
+  // limited to the non-secure events (CR3) and channels (CNS). The registers
+  // of one channel follow that channel's CNS.
   assign mgr_vis = !acc_n || dsr[9];                  // DSR.DNS
   assign ch_vis  = acc_n ? ch_ns  : '1;
-  assign ev_vis  = acc_n ? irq_ns : '1;
+  assign ev_vis  = acc_n ? (dsr[9] ? irq_ns : '0) : '1;
 
   //----------------------------------------------------------------------------
   // Writable registers
@@ -349,6 +356,7 @@ module dma_regs
     ch_dbg_kill       = '0;
     ch_dbg_fault      = '0;
     ch_dbg_evnt_fault = '0;
+    ch_dbg_opnd_fault = '0;
     dbg_sev_valid     = 1'b0;
     dbg_sev_event     = dbg_insn[15:11];
     if (dbg_go && dbg_to_ch && dbg_ch_ok) begin
@@ -356,7 +364,7 @@ module dma_regs
         I_KILL:  ch_dbg_kill[dbg_ch] = 1'b1;
         I_SEV: begin
           if (int'(dbg_sev_event) >= NUM_EVENTS)
-            ch_dbg_fault[dbg_ch] = 1'b1;
+            ch_dbg_opnd_fault[dbg_ch] = 1'b1;
           else if (ch_ns[dbg_ch] && !irq_ns32[dbg_sev_event])
             ch_dbg_evnt_fault[dbg_ch] = 1'b1;
           else
@@ -405,7 +413,7 @@ module dma_regs
       A_RIS:       rdata = 32'(ev_flag & ev_vis);
       A_INTMIS:    rdata = 32'(ev_flag & inten & ev_vis);
       A_FSRD:      rdata = {31'd0, mgr_vis && mgr_faulting};
-      A_FSRC:      rdata = 32'(ch_faulting & ch_vis);
+      A_FSRC:      rdata = mgr_vis ? 32'(ch_faulting & ch_vis) : '0;
       A_FTRD:      rdata = mgr_vis ? ftrd : '0;
       A_DBGSTATUS: rdata = {31'd0, dbg_mgr_busy};
       A_DBGINST0:  rdata = acc_n ? dbg_inst0_ns : dbg_inst0;

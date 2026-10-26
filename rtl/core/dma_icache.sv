@@ -6,9 +6,14 @@
 //   * Fully associative, NUM_LINES lines of LINE_BEATS x DATA_W bits
 //   * Round-robin replacement, blocking (one lookup / refill at a time)
 //   * Requests from the threads' fetch units are served round robin
-//   * Refill uses one AXI INCR burst with ARID = IFETCH_ID (all ones)
-//   * A refill with an error response is returned as an error and is not
-//     allocated
+//   * Each line is tagged with the security state of the fetch that filled
+//     it: a secure and a non-secure thread never share a line, even at the
+//     same address (TRM 2.9: a non-secure thread only fetches non-secure)
+//   * Refill uses one AXI INCR burst with ARID = IFETCH_ID (all ones),
+//     privileged instruction access, cacheable write-through read-allocate
+//     (TRM Table 2-1)
+//   * A refill with a response other than OKAY is returned as an error and is
+//     not allocated
 //   * inv_all clears every valid bit (DMAGO / DMAWFE with invalidate)
 //
 //   IC_IDLE --arbitrate--> IC_LOOKUP --hit--> respond --> IC_IDLE
@@ -66,6 +71,7 @@ module dma_icache
   // Storage
   logic [NUM_LINES-1:0] line_valid;
   logic [TAG_W-1:0]     line_tag  [NUM_LINES];
+  logic [NUM_LINES-1:0] line_ns;
   logic [LINE_W-1:0]    line_data [NUM_LINES];
   logic [WAY_W-1:0]     victim;
 
@@ -107,7 +113,7 @@ module dma_icache
     hit     = 1'b0;
     hit_way = '0;
     for (int w = 0; w < NUM_LINES; w++) begin
-      if (!hit && line_valid[w] && line_tag[w] == cur_tag) begin
+      if (!hit && line_valid[w] && line_tag[w] == cur_tag && line_ns[w] == cur_ns) begin
         hit     = 1'b1;
         hit_way = WAY_W'(w);
       end
@@ -117,12 +123,15 @@ module dma_icache
   //----------------------------------------------------------------------------
   // AXI refill request / data
   //----------------------------------------------------------------------------
+  logic r_bad;                                     // EXOKAY / SLVERR / DECERR
+  assign r_bad = (r_resp != 2'b00);
+
   assign ar_valid = (state == IC_AR);
   assign ar_addr  = {cur_tag, {LINE_LSB{1'b0}}};
   assign ar_len   = 8'(LINE_BEATS - 1);
   assign ar_size  = 3'($clog2(DATA_W / 8));
-  assign ar_cache = 4'b0010;                       // normal, non-bufferable
-  assign ar_prot  = {1'b1, cur_ns, 1'b0};          // instruction access
+  assign ar_cache = 4'b0110;                       // write-through, allocate on read
+  assign ar_prot  = {1'b1, cur_ns, 1'b1};          // instruction, NS, privileged
   assign r_ready  = (state == IC_R);
   assign idle     = (state == IC_IDLE);
 
@@ -133,6 +142,7 @@ module dma_icache
     if (!rst_n) begin
       state      <= IC_IDLE;
       line_valid <= '0;
+      line_ns    <= '0;
       victim     <= '0;
       cur_tid    <= '0;
       cur_tag    <= '0;
@@ -173,14 +183,15 @@ module dma_icache
         IC_R: begin
           if (r_valid) begin
             fill_beat <= fill_beat + 1'b1;
-            fill_err  <= fill_err | r_resp[1];
+            fill_err  <= fill_err | r_bad;
             if (r_last) begin
               resp_valid[cur_tid] <= 1'b1;
-              resp_err            <= fill_err | r_resp[1];
+              resp_err            <= fill_err | r_bad;
               state               <= IC_IDLE;
-              if (!(fill_err | r_resp[1])) begin
+              if (!(fill_err | r_bad)) begin
                 line_valid[victim] <= 1'b1;
                 line_tag[victim]   <= cur_tag;
+                line_ns[victim]    <= cur_ns;
                 victim             <= (int'(victim) == NUM_LINES - 1) ? '0 : victim + 1'b1;
               end
             end
@@ -198,7 +209,7 @@ module dma_icache
   always_ff @(posedge clk) begin
     if (state == IC_R && r_valid) begin
       fill_buf[fill_beat*DATA_W +: DATA_W] <= r_data;
-      if (r_last && !(fill_err | r_resp[1]))
+      if (r_last && !(fill_err | r_bad))
         line_data[victim] <= fill_buf_with_last();
     end
     if (state == IC_LOOKUP && hit)

@@ -194,7 +194,7 @@ class dma_reg_block extends uvm_reg_block;
       CPC[n] = add32($sformatf("CPC%0d", n), 'h104 + 8*n, "RO", 0, 1);
       SAR[n] = add32($sformatf("SAR%0d", n), 'h400 + 'h20*n, "RO", 0, 1);
       DAR[n] = add32($sformatf("DAR%0d", n), 'h404 + 'h20*n, "RO", 0, 1);
-      CCR[n] = add32($sformatf("CCR%0d", n), 'h408 + 'h20*n, "RO", 0, 1);
+      CCR[n] = add32($sformatf("CCR%0d", n), 'h408 + 'h20*n, "RO", 'h0080_0200, 1);  // TRM reset value
       LC0[n] = add32($sformatf("LC0_%0d", n), 'h40C + 'h20*n, "RO", 0, 1);
       LC1[n] = add32($sformatf("LC1_%0d", n), 'h410 + 'h20*n, "RO", 0, 1);
     end

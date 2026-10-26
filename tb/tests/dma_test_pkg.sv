@@ -187,7 +187,7 @@ package dma_test_pkg;
     `uvm_component_utils(dma_m2m_unaligned_test)
     function new(string name, uvm_component parent); super.new(name, parent); endfunction
     virtual function void tune(dma_traffic_vseq v);
-      v.ch_mask = 1; v.jobs_per_ch = 16;
+      v.ch_mask = 1; v.jobs_per_ch = 16; v.cross_4k = 1;
     endfunction
   endclass
 
@@ -415,7 +415,6 @@ package dma_test_pkg;
     dma_boot_vseq bvseq;
     localparam bit [31:0] BOOT_ADDR = 32'h0000_8000;
     localparam int        EV_CH1_DONE = 12;
-    localparam int        MGR_PERIPH  = 3;
 
     function new(string name, uvm_component parent); super.new(name, parent); endfunction
 
@@ -442,17 +441,16 @@ package dma_test_pkg;
       end
 
       mgr = dma330_asm::type_id::create("mgr_prog");
-      mgr.dmaflushp(MGR_PERIPH);                  // manager may flush a peripheral
       mgr.dmanop();
       mgr.dmago(0, bvseq.jobs[0].prog_addr, 1);
       mgr.dmago(1, bvseq.jobs[1].prog_addr, 1);
       mgr.dmawfe(EV_CH1_DONE);
+      mgr.dmawfe(dma_boot_vseq::EV_DBG);          // woken by a debug DMASEV while it waits
       mgr.dmasev(dma_boot_vseq::EV_MGR_DONE);
       bvseq.mgr_end_pc = BOOT_ADDR + mgr.pc();
       // A manager program ends with DMAEND or DMAKILL (both stop the manager)
       if ($urandom_range(1)) mgr.dmakill();
       else                   mgr.dmaend();
-      env.sb.add_expected_ack(MGR_PERIPH, PACK_FLUSH);
       cfg.mem.write_bytes(BOOT_ADDR, mgr.code);
       env.sb.add_prog_region(BOOT_ADDR, mgr.code.size());
       env.cov.sample_program(mgr.code);

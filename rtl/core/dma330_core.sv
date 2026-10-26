@@ -37,7 +37,7 @@ module dma330_core
   parameter int          MFIFO_LINES = 128,     // MFIFO lines shared by all channels
   parameter int          IC_LINES    = 8,       // instruction cache lines
   parameter int          IC_BEATS    = 4,       // beats per cache line
-  parameter logic [31:0] PERIPH_ID   = 32'h0000_0330,
+  parameter logic [31:0] PERIPH_ID   = 32'h0034_1330,   // DMA-330 r1p2
   parameter bit          APB_SLVERR  = 1'b0     // PSLVERR on illegal accesses
 ) (
   input  logic                         clk,
@@ -156,6 +156,7 @@ module dma330_core
   logic [4:0]             flush_periph [NUM_THREADS];
   logic [NUM_CH-1:0]      wfp_valid, wfp_gnt, wfp_burst, wfp_last;
   logic [4:0]             wfp_periph [NUM_CH];
+  logic [1:0]             wfp_kind   [NUM_CH];
   logic                   rd_ack_valid, rd_ack_ready, rd_ack_burst;
   logic                   wr_ack_valid, wr_ack_ready, wr_ack_burst;
   logic [4:0]             rd_ack_periph, wr_ack_periph;
@@ -168,14 +169,14 @@ module dma330_core
   // Debug
   logic                   mgr_dbg_valid, mgr_dbg_done;
   logic [INSN_W-1:0]      mgr_dbg_insn;
-  logic [NUM_CH-1:0]      ch_dbg_kill, ch_dbg_fault, ch_dbg_evnt_fault;
+  logic [NUM_CH-1:0]      ch_dbg_kill, ch_dbg_fault, ch_dbg_evnt_fault, ch_dbg_opnd_fault;
 
   // Security of events / peripherals (CR3 / CR4)
   logic [NUM_EVENTS-1:0]  irq_ns;
   logic [NUM_PERIPH-1:0]  periph_ns;
 
   // Channels <-> data path
-  logic [NUM_CH-1:0]      ld_req, ld_valid, ld_ready, ld_lockup;
+  logic [NUM_CH-1:0]      ld_req, ld_valid, ld_ready, ld_lockup, ld_dlock, ll_release;
   logic [NUM_CH-1:0]      st_valid, st_ready, st_short;
   xfer_t                  ld_xfer [NUM_CH];
   xfer_t                  st_xfer [NUM_CH];
@@ -194,6 +195,7 @@ module dma330_core
   logic [15:0]            wd_timeout;
   logic                   wd_irq_only;
   logic [NUM_CH-1:0]      wd_active, wd_progress, wd_lockup_set, wd_lockup_fault, wd_stat;
+  logic [NUM_CH-1:0]      lockup_set;           // WDSTAT set: watchdog or precise lock-up
 
   // Low power
   logic                   q_run, core_idle, ic_idle, dbg_busy;
@@ -273,7 +275,7 @@ module dma330_core
     .ch_far          (ch_far),
     .wd_timeout      (wd_timeout),
     .wd_irq_only     (wd_irq_only),
-    .wd_lockup_set   (wd_lockup_set),
+    .wd_lockup_set   (lockup_set),
     .wd_stat         (wd_stat),
     .ev_flag         (ev_flag),
     .inten           (inten),
@@ -285,6 +287,7 @@ module dma330_core
     .ch_dbg_kill     (ch_dbg_kill),
     .ch_dbg_fault    (ch_dbg_fault),
     .ch_dbg_evnt_fault (ch_dbg_evnt_fault),
+    .ch_dbg_opnd_fault (ch_dbg_opnd_fault),
     .dbg_sev_valid   (dbg_sev_valid),
     .dbg_sev_event   (dbg_sev_event),
     .dbg_busy        (dbg_busy)
@@ -353,6 +356,7 @@ module dma330_core
       .dbg_kill      (ch_dbg_kill[ch]),
       .dbg_fault     (ch_dbg_fault[ch]),
       .dbg_evnt_fault(ch_dbg_evnt_fault[ch]),
+      .dbg_opnd_fault(ch_dbg_opnd_fault[ch]),
       .wd_fault      (wd_lockup_fault[ch]),
       .irq_ns        (irq_ns),
       .periph_ns     (periph_ns),
@@ -371,6 +375,7 @@ module dma330_core
       .wfe_hit       (wfe_hit[ch]),
       .wfp_valid     (wfp_valid[ch]),
       .wfp_periph    (wfp_periph[ch]),
+      .wfp_kind      (wfp_kind[ch]),
       .wfp_gnt       (wfp_gnt[ch]),
       .wfp_burst     (wfp_burst[ch]),
       .wfp_last      (wfp_last[ch]),
@@ -382,6 +387,8 @@ module dma330_core
       .ld_xfer       (ld_xfer[ch]),
       .ld_ready      (ld_ready[ch]),
       .ld_lockup     (ld_lockup[ch]),
+      .ld_dlock      (ld_dlock[ch] && !wd_irq_only),   // WD.irq_only: report, do not abort
+      .ll_release    (ll_release[ch]),
       .st_valid      (st_valid[ch]),
       .st_xfer       (st_xfer[ch]),
       .st_ready      (st_ready[ch]),
@@ -462,7 +469,11 @@ module dma330_core
     .irq           (irq)
   );
 
-  // Abort interrupt: a thread is faulting, or the watchdog reported a lock-up
+  // Lock-ups reported in WDSTAT: watchdog time-outs, and precise MFIFO
+  // dead-lock detections that do not abort (WD.irq_only = 1)
+  assign lockup_set = wd_lockup_set | (ld_dlock & {NUM_CH{wd_irq_only}});
+
+  // Abort interrupt: a thread is faulting, or a lock-up was reported
   assign irq_abort = mgr_faulting || (|ch_faulting) || (|wd_stat);
 
   //============================================================================
@@ -492,6 +503,7 @@ module dma330_core
     .da_type       (da_type_a),
     .wfp_valid     (wfp_valid),
     .wfp_periph    (wfp_periph),
+    .wfp_kind      (wfp_kind),
     .wfp_gnt       (wfp_gnt),
     .wfp_burst     (wfp_burst),
     .wfp_last      (wfp_last),
@@ -528,6 +540,8 @@ module dma330_core
     .ld_xfer       (ld_xfer),
     .ld_ready      (ld_ready),
     .ld_lockup     (ld_lockup),
+    .ld_dlock      (ld_dlock),
+    .ll_release    (ll_release),
     .st_valid      (st_valid),
     .st_xfer       (st_xfer),
     .st_ready      (st_ready),

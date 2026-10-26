@@ -290,7 +290,7 @@ class axi_slave_driver extends uvm_driver #(axi_txn);
           cur = t;
           vif.slv_cb.rvalid <= 1'b1;
           vif.slv_cb.rid    <= t.id;
-          vif.slv_cb.rdata  <= cfg.mem.read_beat(a);
+          vif.slv_cb.rdata  <= (t.prot[1] && cfg.ns_raz(a)) ? '0 : cfg.mem.read_beat(a);
           vif.slv_cb.rresp  <= r;
           vif.slv_cb.rlast  <= (t.beat_idx == t.num_beats() - 1);
         end else begin

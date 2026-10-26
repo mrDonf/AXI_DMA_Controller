@@ -62,6 +62,8 @@ class dma_job extends uvm_object;
   bit [31:0]          prog_addr;
   int                 pre_wfe_ev  = -1;   // DMAWFE <ev> before the transfer
   bit                 wfe_invalidate = 0; // ... with the i-cache invalidate flag
+  bit                 cross_4k  = 0;      // M2M / FILL: INCR bursts always run across 4 KB
+                                          // boundaries (else: randomly)
   int                 post_sev_ev = -1;   // DMASEV <ev> after the transfer
   dma_periph_pkg::periph_req_e req_types [$];
   bit                 last_on_final = 0;  // the final peripheral request carries drlast

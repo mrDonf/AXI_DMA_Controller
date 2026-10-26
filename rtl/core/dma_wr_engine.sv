@@ -21,9 +21,19 @@
 // * AW and W of the active burst are driven concurrently (AXI allows either
 //   to lead). One burst is active at a time on W (AXI4: no W interleaving).
 // * AWID = channel number. B responses of one ID return in order.
+// * A request whose INCR burst crosses a 4 KB boundary is issued as two AXI
+//   bursts (xfer_piece): the queue entry stays at the head until its second
+//   piece has started. Each piece has its own B tracker entry; only the
+//   second one carries the peripheral acknowledge.
+// * Any response other than OKAY (EXOKAY, SLVERR, DECERR) is an error.
 // * Endian swap (DMAST with CCR.endian_swap != 0): the bytes of every aligned
-//   group of 2**swap bytes are reversed on W. The channel guarantees that the
-//   burst is aligned to the group size, so strobes always cover whole groups.
+//   group of g = 2**swap bytes are reversed. The channel guarantees that DAR
+//   is aligned to g and that the burst holds whole groups (swap_bad).
+//     g <= beat : every beat holds whole groups, they are reversed on W.
+//     g >  beat : (INCR only) a group spans g / beat beats. The MFIFO head
+//                 shows the whole group (g <= bus width); it is reversed and
+//                 each beat takes its slice. The group is popped with its
+//                 last beat.
 //==============================================================================
 module dma_wr_engine
   import dma330_pkg::*;
@@ -104,7 +114,9 @@ module dma_wr_engine
   // Per-channel Write Queue and B tracker
   //============================================================================
   xfer_t              wq_head  [NUM_CH];
+  xfer_t              wq_iss   [NUM_CH];      // AXI burst to start next
   logic [NUM_CH-1:0]  wq_empty, wq_pop;
+  logic [NUM_CH-1:0]  wq_cross, wq_split;     // head crosses 4 KB / first piece started
   btrk_t              btrk_head [NUM_CH];
   logic [NUM_CH-1:0]  btrk_empty, btrk_full, btrk_push, btrk_pop;
 
@@ -117,10 +129,13 @@ module dma_wr_engine
 
   for (genvar ch = 0; ch < NUM_CH; ch++) begin : g_ch
     btrk_t btrk_in;
-    assign btrk_in = '{addr:       wq_head[ch].addr,
-                       periph_ack: wq_head[ch].periph_ack,
-                       periph:     wq_head[ch].periph,
-                       ack_burst:  wq_head[ch].ack_burst};
+    assign wq_cross[ch] = crosses_4k(wq_head[ch].addr, wq_head[ch].size,
+                                     wq_head[ch].len, wq_head[ch].inc);
+    assign wq_iss[ch]   = xfer_piece(wq_head[ch], wq_split[ch]);
+    assign btrk_in = '{addr:       wq_iss[ch].addr,
+                       periph_ack: wq_iss[ch].periph_ack,
+                       periph:     wq_iss[ch].periph,
+                       ack_burst:  wq_iss[ch].ack_burst};
 
     dma_sync_fifo #(.WIDTH(XFER_W), .DEPTH(WQ_DEPTH)) u_wq (
       .clk     (clk),
@@ -164,8 +179,8 @@ module dma_wr_engine
 
   for (genvar ch = 0; ch < NUM_CH; ch++) begin : g_cand
     assign cand[ch] = !wq_empty[ch] && !btrk_full[ch] && !ch_flush[ch] &&
-                      (wq_head[ch].zero ||
-                       mf_count[ch] >= MF_CNT_W'(wq_head[ch].bytes));
+                      (wq_iss[ch].zero ||
+                       mf_count[ch] >= MF_CNT_W'(wq_iss[ch].bytes));
   end
 
   dma_rr_arbiter #(.N(NUM_CH)) u_wr_arb (
@@ -179,8 +194,20 @@ module dma_wr_engine
   );
 
   assign start     = !act_valid && sel_valid;
-  assign wq_pop    = start ? sel_gnt : '0;
-  assign btrk_push = wq_pop;           // B tracker entry allocated at start
+  assign btrk_push = start ? sel_gnt : '0;              // one B tracker entry per AXI burst
+  // The queue entry leaves with its last (or only) piece
+  assign wq_pop    = btrk_push & (~wq_cross | wq_split);
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      wq_split <= '0;
+    end else begin
+      for (int ch = 0; ch < NUM_CH; ch++) begin
+        if (ch_flush[ch] || wq_pop[ch]) wq_split[ch] <= 1'b0;
+        else if (btrk_push[ch])         wq_split[ch] <= 1'b1;  // first piece started
+      end
+    end
+  end
 
   //============================================================================
   // AW / W generation for the active burst
@@ -210,12 +237,27 @@ module dma_wr_engine
     for (int k = 0; k < NB; k++) w_lane_mask[k*8 +: 8] = {8{m_wstrb[k]}};
   end
 
+  // Endian swap wider than the beat: beat j of a group of g bytes
+  logic               grp_mode, grp_last;
+  logic [3:0]         grp_beats_m1, grp_j;
+  logic [127:0]       grp_rev;
+  logic [DATA_W-1:0]  grp_slice;
+
+  assign grp_mode     = (act_x.swap != 3'd0) && (act_x.swap > act_x.size);
+  assign grp_beats_m1 = 4'((5'd1 << (act_x.swap - act_x.size)) - 5'd1);
+  assign grp_j        = w_beat & grp_beats_m1;
+  assign grp_last     = (grp_j == grp_beats_m1);
+  assign grp_rev      = endian_swap(128'(mf_pop_data), act_x.swap);
+  assign grp_slice    = DATA_W'(grp_rev >> ((32'(grp_j) << act_x.size) * 8));
+
   assign m_wvalid  = act_valid && w_pend;
   assign m_wstrb   = NB'(((1 << w_nbytes) - 1) << w_lane);
   logic [DATA_W-1:0] w_data_lanes;
   assign mf_pop_ch    = act_ch;
-  assign w_data_lanes = (mf_pop_data << (w_lane * 8)) & w_lane_mask;
-  assign m_wdata   = act_x.zero ? '0 : DATA_W'(endian_swap(128'(w_data_lanes), act_x.swap));
+  assign w_data_lanes = ((grp_mode ? grp_slice : mf_pop_data) << (w_lane * 8)) & w_lane_mask;
+  assign m_wdata   = act_x.zero ? '0 :
+                     grp_mode   ? w_data_lanes :
+                                  DATA_W'(endian_swap(128'(w_data_lanes), act_x.swap));
   assign m_wlast   = (w_beat == act_x.len);
 
   assign aw_fire   = m_awvalid && m_awready;
@@ -223,9 +265,9 @@ module dma_wr_engine
 
   always_comb begin
     mf_pop = '0;
-    mf_pop[act_ch] = w_fire && !act_x.zero;
+    mf_pop[act_ch] = w_fire && !act_x.zero && (!grp_mode || grp_last);
   end
-  assign mf_pop_n = w_nbytes;
+  assign mf_pop_n = grp_mode ? NBYTE_W'(5'd1 << act_x.swap) : w_nbytes;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -238,7 +280,7 @@ module dma_wr_engine
     end else if (start) begin
       act_valid <= 1'b1;
       act_ch    <= sel_idx;
-      act_x     <= wq_head[sel_idx];
+      act_x     <= wq_iss[sel_idx];
       aw_pend   <= 1'b1;
       w_pend    <= 1'b1;
       w_beat    <= '0;
@@ -278,7 +320,7 @@ module dma_wr_engine
     wr_err   = '0;
     if (b_fire) begin
       btrk_pop[b_ch] = 1'b1;
-      wr_err[b_ch]   = m_bresp[1];
+      wr_err[b_ch]   = (m_bresp != 2'b00);    // EXOKAY / SLVERR / DECERR
     end
   end
 

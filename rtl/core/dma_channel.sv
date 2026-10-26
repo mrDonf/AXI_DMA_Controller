@@ -10,7 +10,7 @@
 //
 //   STOPPED --DMAGO--> FETCH <--> EXEC --+--> WFE        (DMAWFE)
 //                        ^               +--> WFP        (DMAWFP)
-//                        |               +--> BARRIER    (DMARMB/DMAWMB)
+//                        |               +--> BARRIER    (DMARMB/DMAWMB/DMAFLUSHP)
 //                        +---------------+--> COMPLETING (DMAEND) --> STOPPED
 //                                        +--> KILLING    (DMAKILL) -> STOPPED
 //   any error ------------> FAULT_COMPLETING --> FAULTING --dbg DMAKILL--> KILLING
@@ -18,13 +18,26 @@
 // Security: a non-secure thread (DMAGO ns = 1) may only use the events and
 // peripherals that are non-secure in CR3 / CR4 (boot_irq_ns / boot_periph_ns).
 // DMASEV / DMAWFE of a secure event faults with ch_evnt_err; DMAWFP,
-// DMAFLUSHP, DMALDP, DMASTP of a secure peripheral with ch_periph_err.
+// DMAFLUSHP, DMALDP, DMASTP of a secure peripheral with ch_periph_err. Its
+// DMALD / DMAST fault with ch_rdwr_err when CCR asks for a secure access
+// (src/dst_prot[1] = 0). An event or peripheral number the configuration
+// does not have is an invalid operand (operand_invalid).
 //
-// Protocol protection: a DMALD/DMAST whose INCR burst would cross a 4 KB
-// boundary, or a DMAST with an illegal endian-swap setting, faults the channel
-// (ch_rdwr_err) instead of putting an illegal transaction on the AXI bus.
-// Watchdog: 'wd_fault' (channel made no progress for the programmed time)
-// faults the channel with lockup_err.
+// Bursts: DMALD/DMAST S and DMALDPS/DMASTPS move one beat (AxLEN = 0, the
+// burst length of CCR is ignored); the other forms use the CCR burst. An INCR
+// burst that crosses 4 KB is split into two AXI bursts by the data path.
+// A DMAST with an endian-swap setting the data path cannot honour faults with
+// ch_rdwr_err (see swap_bad).
+// DMAWFP single / burst set request_type to single / burst and request_last
+// to 0; DMAWFP periph copies both from the request (TRM 2.6.4).
+// DMAFLUSHP waits at a barrier until the channel's reads and writes (and so
+// their peripheral acknowledges) are complete, then sends the flush.
+// Load-lock (TRM 2.11.4): ll_release tells the data path that this channel
+// gives the load-lock up (store, barrier, wait, end, abort).
+// Lock-up: 'ld_lockup' (the load can never fit the MFIFO) faults with
+// mfifo_err; 'ld_dlock' (MFIFO dead-lock between channels, precise lock-up
+// detection) and 'wd_fault' (no progress for the programmed time) fault with
+// lockup_err.
 // FAR keeps the address of the first bus error since DMAGO.
 //
 // While KILLING / FAULT_* / STOPPED the data path is told to flush this
@@ -49,6 +62,7 @@ module dma_channel
   input  logic                    dbg_kill,
   input  logic                    dbg_fault,
   input  logic                    dbg_evnt_fault, // debug DMASEV of a secure event
+  input  logic                    dbg_opnd_fault, // debug DMASEV of a missing event
   input  logic                    wd_fault,       // watchdog lock-up
 
   // Security of each event / peripheral (1: non-secure), CR3 / CR4
@@ -75,6 +89,7 @@ module dma_channel
   // Peripheral request interface
   output logic                    wfp_valid,
   output logic [4:0]              wfp_periph,
+  output logic [1:0]              wfp_kind,       // {burst, periph}: 00 single, 01 periph, 10 burst
   input  logic                    wfp_gnt,
   input  logic                    wfp_burst,
   input  logic                    wfp_last,
@@ -87,7 +102,9 @@ module dma_channel
   output logic                    ld_valid,
   output xfer_t                   ld_xfer,
   input  logic                    ld_ready,
-  input  logic                    ld_lockup,
+  input  logic                    ld_lockup,      // load can never fit: mfifo_err
+  input  logic                    ld_dlock,       // MFIFO dead-lock: lockup_err
+  output logic                    ll_release,     // give the load-lock up
   output logic                    st_valid,
   output xfer_t                   st_xfer,
   input  logic                    st_ready,
@@ -132,6 +149,8 @@ module dma_channel
   logic              req_last;     // peripheral signalled its last request
   logic [4:0]        wake_num;     // event / peripheral being waited for
   logic              barrier_wr;   // 1: DMAWMB, 0: DMARMB
+  logic              barrier_fl;   // DMAFLUSHP: wait for reads and writes
+  logic [4:0]        flush_num;    // peripheral of the pending DMAFLUSHP
   logic              wfp_is_burst, wfp_is_periph;
   logic              far_valid;    // FAR holds an error address
   logic              wd_can_fault; // states in which a watchdog lock-up aborts
@@ -182,28 +201,37 @@ module dma_channel
   assign pc_next = pc + ADDR_W'(insn_len(op));
   assign cond_ok = !op[0] || (op[1] == req_burst);
 
+  // DMALD/DMAST with the S suffix and DMALDPS/DMASTPS (op[1:0] = 01) move a
+  // single beat: the CCR burst length is ignored (TRM 2.6.4, 4.3.7, 4.3.16)
+  logic       xfer_single;
+  logic [3:0] ld_len, st_len;
+
+  assign xfer_single = (op[1:0] == 2'b01);
+  assign ld_len      = xfer_single ? 4'd0 : ccr.src_burst_len;
+  assign st_len      = xfer_single ? 4'd0 : ccr.dst_burst_len;
+
   // Burst descriptors for DMALD / DMAST
   always_comb begin
     ld_xfer            = '0;
     ld_xfer.addr       = sar;
-    ld_xfer.len        = ccr.src_burst_len;
+    ld_xfer.len        = ld_len;
     ld_xfer.size       = ccr.src_burst_size;
     ld_xfer.inc        = ccr.src_inc;
-    ld_xfer.cache      = {1'b0, ccr.src_cache};
-    ld_xfer.prot       = ccr.src_prot | {1'b0, ns, 1'b0};
-    ld_xfer.bytes      = burst_bytes(sar, ccr.src_burst_size, ccr.src_burst_len, ccr.src_inc);
+    ld_xfer.cache      = {1'b0, ccr.src_cache};                       // ARCACHE[2:0]
+    ld_xfer.prot       = ccr.src_prot;
+    ld_xfer.bytes      = burst_bytes(sar, ccr.src_burst_size, ld_len, ccr.src_inc);
     ld_xfer.periph_ack = (cls == I_LDP);
     ld_xfer.periph     = num5;
     ld_xfer.ack_burst  = op[1];
 
     st_xfer            = '0;
     st_xfer.addr       = dar;
-    st_xfer.len        = ccr.dst_burst_len;
+    st_xfer.len        = st_len;
     st_xfer.size       = ccr.dst_burst_size;
     st_xfer.inc        = ccr.dst_inc;
-    st_xfer.cache      = {1'b0, ccr.dst_cache};
-    st_xfer.prot       = ccr.dst_prot | {1'b0, ns, 1'b0};
-    st_xfer.bytes      = burst_bytes(dar, ccr.dst_burst_size, ccr.dst_burst_len, ccr.dst_inc);
+    st_xfer.cache      = {ccr.dst_cache[2], 1'b0, ccr.dst_cache[1:0]}; // AWCACHE[3,1,0]
+    st_xfer.prot       = ccr.dst_prot;
+    st_xfer.bytes      = burst_bytes(dar, ccr.dst_burst_size, st_len, ccr.dst_inc);
     st_xfer.zero       = (cls == I_STZ);
     st_xfer.periph_ack = (cls == I_STP);
     st_xfer.periph     = num5;
@@ -211,15 +239,25 @@ module dma_channel
     st_xfer.swap       = (cls == I_STZ) ? 3'd0 : ccr.endian_swap;
   end
 
-  // Store-side endian swap legality: the swap size may not exceed the beat
-  // size (so every beat carries whole groups) and DAR must be aligned to it.
-  logic swap_bad;
+  // Store-side endian swap legality (TRM 2.11.2). Swap groups of g bytes:
+  //   * g must fit in one data-bus word (configuration limit) and DAR must be
+  //     aligned to g
+  //   * INCR : the burst must hold whole groups (len x size multiple of g); a
+  //     group may then span several beats narrower than g
+  //   * FIXED: every beat must hold whole groups (dst_burst_size >= swap)
+  logic       swap_bad;
+  logic [3:0] swap_mask;
+
+  assign swap_mask = 4'((5'd1 << ccr.endian_swap) - 5'd1);
+
   always_comb begin
     swap_bad = 1'b0;
     if (ccr.endian_swap != 3'd0 && cls != I_STZ) begin
       swap_bad = (ccr.endian_swap > 3'd4) ||
-                 (ccr.endian_swap > ccr.dst_burst_size) ||
-                 ((dar[3:0] & 4'((1 << ccr.endian_swap) - 1)) != 4'd0);
+                 (ccr.endian_swap > MAX_SIZE) ||
+                 ((dar[3:0] & swap_mask) != 4'd0) ||
+                 (ccr.dst_inc ? ((st_xfer.bytes[3:0] & swap_mask) != 4'd0)
+                              : (ccr.endian_swap > ccr.dst_burst_size));
     end
   end
 
@@ -227,7 +265,7 @@ module dma_channel
   // Execute-time fault detection (all combinational on the current insn)
   //----------------------------------------------------------------------------
   logic        is_load, is_store, do_xfer;
-  logic        ev_bad, pe_bad;
+  logic        ev_range_bad, ev_sec_bad, pe_range_bad, pe_sec_bad;
   logic [31:0] irq_ns32, periph_ns32;
   logic [31:0] exec_fault_base, exec_fault;
 
@@ -236,14 +274,17 @@ module dma_channel
   // DMASTZ is unconditional (op[0] = 0)
   assign do_xfer  = (is_load || is_store) && cond_ok;
 
-  // Event / peripheral number missing, or secure for a non-secure thread
-  assign irq_ns32    = 32'(irq_ns);
-  assign periph_ns32 = 32'(periph_ns);
-  assign ev_bad      = (int'(num5) >= NUM_EVENTS) || (ns && !irq_ns32[num5]);
-  assign pe_bad      = (int'(num5) >= NUM_PERIPH) || (ns && !periph_ns32[num5]);
+  // Event / peripheral number missing from the configuration (invalid
+  // operand), or secure for a non-secure thread (security fault)
+  assign irq_ns32     = 32'(irq_ns);
+  assign periph_ns32  = 32'(periph_ns);
+  assign ev_range_bad = (int'(num5) >= NUM_EVENTS);
+  assign pe_range_bad = (int'(num5) >= NUM_PERIPH);
+  assign ev_sec_bad   = !ev_range_bad && ns && !irq_ns32[num5];
+  assign pe_sec_bad   = !pe_range_bad && ns && !periph_ns32[num5];
 
-  // Every execute-time fault except the MFIFO lock-up, which the data path
-  // decides from ld_req (so it never depends on itself)
+  // Every execute-time fault except the MFIFO lock-ups, which the data path
+  // decides from ld_req (so they never depend on themselves)
   always_comb begin
     exec_fault_base = '0;
     case (cls)
@@ -251,22 +292,28 @@ module dma_channel
         exec_fault_base[FTC_UNDEF_INSTR] = 1'b1;
       I_MOV:
         exec_fault_base[FTC_OPERAND_INVALID] = (b1 > 8'd2);
-      I_SEV, I_WFE:
-        exec_fault_base[FTC_CH_EVNT_ERR] = ev_bad;
-      I_WFP, I_FLUSHP:
-        exec_fault_base[FTC_CH_PERIPH_ERR] = pe_bad;
+      I_SEV, I_WFE: begin
+        exec_fault_base[FTC_OPERAND_INVALID] = ev_range_bad;
+        exec_fault_base[FTC_CH_EVNT_ERR]     = ev_sec_bad;
+      end
+      I_WFP, I_FLUSHP: begin
+        exec_fault_base[FTC_OPERAND_INVALID] = pe_range_bad;
+        exec_fault_base[FTC_CH_PERIPH_ERR]   = pe_sec_bad;
+      end
       default: ;
     endcase
 
     if (do_xfer) begin
-      if (cls == I_LDP || cls == I_STP)
-        exec_fault_base[FTC_CH_PERIPH_ERR] = pe_bad;
+      if (cls == I_LDP || cls == I_STP) begin
+        exec_fault_base[FTC_OPERAND_INVALID] = pe_range_bad;
+        exec_fault_base[FTC_CH_PERIPH_ERR]   = pe_sec_bad;
+      end
       if (is_load) begin
         exec_fault_base[FTC_CH_RDWR_ERR] = (ccr.src_burst_size > MAX_SIZE) ||
-                                           crosses_4k(sar, ccr.src_burst_size, ccr.src_burst_len, ccr.src_inc);
+                                           (ns && !ccr.src_prot[1]);
       end else begin
         exec_fault_base[FTC_CH_RDWR_ERR]     = (ccr.dst_burst_size > MAX_SIZE) || swap_bad ||
-                                               crosses_4k(dar, ccr.dst_burst_size, ccr.dst_burst_len, ccr.dst_inc);
+                                               (ns && !ccr.dst_prot[1]);
         exec_fault_base[FTC_ST_DATA_UNAVAIL] = st_short;
       end
     end
@@ -275,8 +322,9 @@ module dma_channel
   assign ld_req = (state == C_EXEC) && do_xfer && is_load && (exec_fault_base == '0);
 
   always_comb begin
-    exec_fault                = exec_fault_base;
-    exec_fault[FTC_MFIFO_ERR] = ld_req && ld_lockup;
+    exec_fault                 = exec_fault_base;
+    exec_fault[FTC_MFIFO_ERR]  = ld_req && ld_lockup;
+    exec_fault[FTC_LOCKUP_ERR] = ld_req && ld_dlock;
   end
 
   //============================================================================
@@ -297,17 +345,27 @@ module dma_channel
 
   assign wfp_valid    = (state == C_WFP);
   assign wfp_periph   = wake_num;
-  assign flush_valid  = in_exec_ok && (cls == I_FLUSHP);
-  assign flush_periph = num5;
+  assign wfp_kind     = {wfp_is_burst, wfp_is_periph};
 
   assign dp_flush     = (state == C_STOPPED)          || (state == C_KILLING) ||
                         (state == C_FAULT_COMPLETING) || (state == C_FAULTING);
 
+  logic dp_idle;
+  assign dp_idle = !rd_busy && !wr_busy;
+
+  // DMAFLUSHP: the flush request is sent once every earlier transfer (and its
+  // acknowledge) is done, so it can never overtake a DMALDP/DMASTP acknowledge
+  assign flush_valid  = (state == C_BARRIER) && barrier_fl && dp_idle;
+  assign flush_periph = flush_num;
+
+  // Load-lock release: DMAST*, barriers, waits, DMAEND, DMAKILL, any abort
+  assign ll_release   = dp_flush ||
+                        (in_exec_ok && (cls inside {I_ST, I_STP, I_STZ, I_RMB, I_WMB, I_FLUSHP,
+                                                    I_WFP, I_WFE, I_END, I_KILL}));
+
   //============================================================================
   // Thread state machine
   //============================================================================
-  logic dp_idle;
-  assign dp_idle = !rd_busy && !wr_busy;
 
   // A watchdog lock-up aborts a running program; a channel that is already
   // being killed or faulted is only reported (WDSTAT)
@@ -320,7 +378,7 @@ module dma_channel
       pc            <= '0;
       sar           <= '0;
       dar           <= '0;
-      ccr           <= '0;
+      ccr           <= ccr_t'(32'h0080_0200);  // TRM reset value (non-secure accesses)
       lc0           <= '0;
       lc1           <= '0;
       ns            <= 1'b0;
@@ -328,6 +386,8 @@ module dma_channel
       req_last      <= 1'b0;
       wake_num      <= '0;
       barrier_wr    <= 1'b0;
+      barrier_fl    <= 1'b0;
+      flush_num     <= '0;
       wfp_is_burst  <= 1'b0;
       wfp_is_periph <= 1'b0;
       ftr           <= '0;
@@ -377,6 +437,7 @@ module dma_channel
 
               I_RMB, I_WMB: begin
                 barrier_wr <= (cls == I_WMB);
+                barrier_fl <= 1'b0;
                 state      <= C_BARRIER;
               end
 
@@ -434,12 +495,9 @@ module dma_channel
               end
 
               I_FLUSHP: begin
-                if (flush_ready) begin
-                  req_burst <= 1'b0;
-                  req_last  <= 1'b0;
-                  pc        <= pc_next;
-                  state     <= C_FETCH;
-                end
+                barrier_fl <= 1'b1;
+                flush_num  <= num5;
+                state      <= C_BARRIER;
               end
 
               I_WFE: begin
@@ -480,14 +538,22 @@ module dma_channel
         C_WFP: begin
           if (wfp_gnt) begin
             req_burst <= wfp_is_periph ? wfp_burst : wfp_is_burst;
-            req_last  <= wfp_last;
+            req_last  <= wfp_is_periph && wfp_last;
             pc        <= pc_next;
             state     <= C_FETCH;
           end
         end
 
         C_BARRIER: begin
-          if (barrier_wr ? !wr_busy : !rd_busy) begin
+          if (barrier_fl) begin
+            if (flush_valid && flush_ready) begin
+              req_burst  <= 1'b0;
+              req_last   <= 1'b0;
+              barrier_fl <= 1'b0;
+              pc         <= pc_next;
+              state      <= C_FETCH;
+            end
+          end else if (barrier_wr ? !wr_busy : !rd_busy) begin
             pc    <= pc_next;
             state <= C_FETCH;
           end
@@ -522,9 +588,11 @@ module dma_channel
           state <= C_FAULT_COMPLETING;
       end
 
-      if ((dbg_fault || dbg_evnt_fault) && state != C_FAULT_COMPLETING && state != C_FAULTING) begin
-        if (dbg_fault)      ftr[FTC_UNDEF_INSTR] <= 1'b1;
-        if (dbg_evnt_fault) ftr[FTC_CH_EVNT_ERR] <= 1'b1;
+      if ((dbg_fault || dbg_evnt_fault || dbg_opnd_fault) &&
+          state != C_FAULT_COMPLETING && state != C_FAULTING) begin
+        if (dbg_fault)      ftr[FTC_UNDEF_INSTR]     <= 1'b1;
+        if (dbg_evnt_fault) ftr[FTC_CH_EVNT_ERR]     <= 1'b1;
+        if (dbg_opnd_fault) ftr[FTC_OPERAND_INVALID] <= 1'b1;
         ftr[FTC_DBG_INSTR] <= 1'b1;
         state              <= C_FAULT_COMPLETING;
       end

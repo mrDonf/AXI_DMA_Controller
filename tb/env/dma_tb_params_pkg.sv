@@ -15,7 +15,7 @@ package dma_tb_params_pkg;
   localparam int MFIFO_LINES = 128;         // shared by all channels
   localparam int IC_LINES    = 8;
   localparam int IC_BEATS    = 4;
-  localparam logic [31:0] PERIPH_ID = 32'h0000_0330;
+  localparam logic [31:0] PERIPH_ID = 32'h0034_1330;   // expected DUT default: DMA-330 r1p2
 
   localparam int IFETCH_ID   = (1 << ID_W) - 1;
   localparam int MFIFO_BYTES = MFIFO_LINES * DATA_W / 8;   // whole MFIFO pool
