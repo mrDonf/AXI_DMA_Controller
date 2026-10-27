@@ -176,11 +176,17 @@ module dma_wr_engine
   logic [CH_W-1:0]   sel_idx;
   logic              sel_valid;
   logic              start;
+  logic              finish;
+  logic              aw_fire, w_fire;
 
   for (genvar ch = 0; ch < NUM_CH; ch++) begin : g_cand
     assign cand[ch] = !wq_empty[ch] && !btrk_full[ch] && !ch_flush[ch] &&
                       (wq_iss[ch].zero ||
-                       mf_count[ch] >= MF_CNT_W'(wq_iss[ch].bytes));
+                       // A replacement can start on the last beat of the
+                       // current burst. Those bytes are no longer available
+                       // to the replacement, including a wide swap-group pop.
+                       (int'(mf_count[ch]) - (mf_pop[ch] ? int'(mf_pop_n) : 0)) >=
+                         int'(wq_iss[ch].bytes));
   end
 
   dma_rr_arbiter #(.N(NUM_CH)) u_wr_arb (
@@ -193,7 +199,9 @@ module dma_wr_engine
     .gnt_valid (sel_valid)
   );
 
-  assign start     = !act_valid && sel_valid;
+  assign finish    = act_valid && (!aw_pend || aw_fire) &&
+                    (!w_pend || (w_fire && m_wlast));
+  assign start     = (!act_valid || finish) && sel_valid;
   assign btrk_push = start ? sel_gnt : '0;              // one B tracker entry per AXI burst
   // The queue entry leaves with its last (or only) piece
   assign wq_pop    = btrk_push & (~wq_cross | wq_split);
@@ -215,7 +223,6 @@ module dma_wr_engine
   logic [ADDR_W-1:0]  w_addr;
   logic [LANE_W-1:0]  w_lane;
   logic [NBYTE_W-1:0] w_nbytes;
-  logic               aw_fire, w_fire;
 
   assign w_addr   = beat_addr(act_x.addr, act_x.size, act_x.inc, w_beat);
   assign w_lane   = w_addr[LANE_W-1:0];
@@ -289,7 +296,7 @@ module dma_wr_engine
       if (w_fire)             w_beat  <= w_beat + 4'd1;
       if (w_fire && m_wlast)  w_pend  <= 1'b0;
       // Burst finished once both the address and the last beat are accepted
-      if ((!aw_pend || aw_fire) && (!w_pend || (w_fire && m_wlast)))
+      if (finish)
         act_valid <= 1'b0;
     end
   end

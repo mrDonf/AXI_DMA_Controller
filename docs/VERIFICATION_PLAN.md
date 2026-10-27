@@ -6,7 +6,7 @@
 | Phương pháp | UVM-1.2, constrained-random + directed, coverage-driven, SVA, reference model |
 | Simulator | QuestaSim 10.7c (UVM-1.2 precompiled) |
 | Tài liệu liên quan | [DESIGN_SPEC.md](DESIGN_SPEC.md) (đặc tả), [TESTCASES.md](TESTCASES.md) (chi tiết từng test), [CMODEL.md](CMODEL.md) (C model qua DPI-C) |
-| Phiên bản | 1.4 (kiểm chứng các bản sửa theo TRM DMA-330 r1p2: lệnh `S` một beat, `DMAWFP S/B`, tách 4 KB, load-lock + lock-up chính xác, barrier `DMAFLUSHP`, `CCR` của kênh NS, tag NS của I-cache, mã lỗi, thuộc tính AXI, EXOKAY, `PERIPH_ID`, reset `CCR`, debug khi manager chờ, reset CDC từng domain). 1.3: MFIFO dùng chung, security. 1.2: C reference model qua DPI-C và chương trình ngẫu nhiên cấp ISA. 1.1: bảo vệ AXI, endian swap, watchdog, FAR, Q-Channel, PSLVERR |
+| Phiên bản | 1.5 (test cache coherency theo thread, unit RTL và mutation cache/write). 1.4 (kiểm chứng các bản sửa theo TRM DMA-330 r1p2: lệnh `S` một beat, `DMAWFP S/B`, tách 4 KB, load-lock + lock-up chính xác, barrier `DMAFLUSHP`, `CCR` của kênh NS, tag NS của I-cache, mã lỗi, thuộc tính AXI, EXOKAY, `PERIPH_ID`, reset `CCR`, debug khi manager chờ, reset CDC từng domain). 1.3: MFIFO dùng chung, security. 1.2: C reference model qua DPI-C và chương trình ngẫu nhiên cấp ISA. 1.1: bảo vệ AXI, endian swap, watchdog, FAR, Q-Channel, PSLVERR |
 
 ---
 
@@ -506,7 +506,7 @@ python run_regression.py -t dma_stress_test -c async --seeds 10 -j 16
 
 | # | Tiêu chí | Ngưỡng |
 |---|---|---|
-| 1 | Regression đầy đủ (24 test × 2 cấu hình × ≥ 3 seed) | 100 % PASS |
+| 1 | Regression đầy đủ (25 test × 2 cấu hình × ≥ 3 seed) | 100 % PASS |
 | 2 | Không có assertion fail | 0 |
 | 3 | Statement / FSM state / FSM transition (theo design unit) | 100 % (statement: ngoại lệ đã giải thích ở 9.3) |
 | 4 | Branch (theo design unit) | ≥ 98 %, phần thiếu được giải thích |
@@ -515,7 +515,11 @@ python run_regression.py -t dma_stress_test -c async --seeds 10 -j 16
 | 7 | Mọi hạng mục VP ở mục 5 có test và đã PASS | 100 % |
 | 8 | Mutation testing: mọi lỗi cấy vào RTL bị phát hiện | 100 % |
 
-### 9.2 Kết quả (v1.4: regression 24 test × sync/async × 3 seed)
+### 9.2 Kết quả
+
+**Bản sửa `Codex_rtl`, 2026-10-27:** 150/150 lượt UVM PASS (25 test × sync/async × seed 1–3), C model 173/173 kiểm tra PASS. Thêm `dma_cache_test`, 9 cấu hình unit RTL và kiểm tra 5 mutation cache/fetch/write. Các assertion mới kiểm tra invalidate khi END/KILL ở manager và channel. Xem [RTL_REVIEW_FIXES.md](RTL_REVIEW_FIXES.md) để biết lệnh chạy, phạm vi tham số và giới hạn xác nhận.
+
+**Kết quả coverage lịch sử v1.4** (24 test × sync/async × 3 seed; chưa đo lại coverage sau bản sửa `Codex_rtl`):
 
 | Chỉ số | Kết quả | Đạt |
 |---|---|---|
@@ -633,7 +637,7 @@ Lần chạy đầu, mutation "không giữ `PREADY`" không bị phát hiện. 
 | `PSLVERR` ở cấu hình sync | Với `APB_SLVERR = 0` DUT không bao giờ sinh `PSLVERR` (đúng đặc tả); trường hợp có lỗi được kiểm tra ở cấu hình async |
 | Lỗi dữ liệu khi kênh đã ở `FAULTING` | Kênh chỉ vào Faulting khi mọi burst đã retire |
 | `dbg_fault` khi kênh đang `FAULT_COMPLETING` | Cửa sổ thời gian vài chu kỳ; hành vi giống trường hợp Faulting (đã test) |
-| Fetch unit: kill rồi khởi động lại trước khi response I-cache về | Có thể tới nhưng cửa sổ rất hẹp; hành vi đã được kiểm tra ở mức "kill khi cache miss" |
+| Fetch unit: kill rồi khởi động lại trước khi response I-cache về | Đã có directed test `dma_fetch_unit_tb`: đổi PC trước response cũ, bỏ lỗi/fill cũ rồi fetch đúng PC mới |
 
 ---
 

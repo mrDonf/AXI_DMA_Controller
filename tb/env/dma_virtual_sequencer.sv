@@ -16,10 +16,14 @@ class dma_virtual_sequencer extends uvm_sequencer;
   // DBGINST0/DBGINST1/DBGCMD must be written as one atomic group (on either
   // port: both share the manager's debug busy flag)
   semaphore                        dbg_lock;
+  // UVM write() sets the desired value before its internal bus lock. Keep
+  // concurrent channel sequences from racing that set/predict operation.
+  semaphore                        ral_lock;
 
   function new(string name, uvm_component parent);
     super.new(name, parent);
     dbg_lock = new(1);
+    ral_lock = new(1);
   endfunction
 
 endclass : dma_virtual_sequencer

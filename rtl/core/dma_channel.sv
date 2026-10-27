@@ -70,7 +70,7 @@ module dma_channel
   input  logic [NUM_PERIPH-1:0]   periph_ns,
 
   // Instruction cache
-  input  logic                    ic_inv_all,
+  input  logic                    ic_inv,
   output logic                    ic_inv_req,
   output logic                    ic_req,
   output logic [ADDR_W-1:0]       ic_addr,
@@ -78,6 +78,7 @@ module dma_channel
   input  logic                    ic_resp_valid,
   input  logic [LINE_BYTES*8-1:0] ic_resp_data,
   input  logic                    ic_resp_err,
+  input  logic                    ic_resp_retry,
 
   // Events
   output logic                    sev_valid,
@@ -169,7 +170,7 @@ module dma_channel
     .rst_n         (rst_n),
     .fetch_req     (fetch_req),
     .pc            (pc),
-    .inv           (ic_inv_all),
+    .inv           (ic_inv),
     .insn_valid    (insn_valid),
     .insn          (insn),
     .fetch_err     (fetch_err),
@@ -178,7 +179,8 @@ module dma_channel
     .ic_addr       (ic_addr),
     .ic_resp_valid (ic_resp_valid),
     .ic_resp_data  (ic_resp_data),
-    .ic_resp_err   (ic_resp_err)
+    .ic_resp_err   (ic_resp_err),
+    .ic_resp_retry (ic_resp_retry)
   );
 
   //============================================================================
@@ -331,6 +333,7 @@ module dma_channel
   // Outputs to the data path, event unit and peripheral controller
   //============================================================================
   logic in_exec_ok;
+  logic dp_idle;
   assign in_exec_ok = (state == C_EXEC) && (exec_fault == '0);
 
   assign ld_valid     = in_exec_ok && do_xfer && is_load;
@@ -338,7 +341,11 @@ module dma_channel
 
   assign sev_valid    = in_exec_ok && (cls == I_SEV);
   assign sev_event    = num5;
-  assign ic_inv_req   = in_exec_ok && (cls == I_WFE) && b1[1];
+  // Thread-local maintenance. A start also discards a late fetch left by a
+  // previous kill; a DMAGO to a running channel remains a complete NOP.
+  assign ic_inv_req   = (in_exec_ok && (cls == I_WFE) && b1[1]) ||
+                        (state == C_STOPPED && go_valid) ||
+                        ((state == C_COMPLETING || state == C_KILLING) && dp_idle);
 
   assign wfe_valid    = (state == C_WFE);
   assign wfe_event    = wake_num;
@@ -350,7 +357,6 @@ module dma_channel
   assign dp_flush     = (state == C_STOPPED)          || (state == C_KILLING) ||
                         (state == C_FAULT_COMPLETING) || (state == C_FAULTING);
 
-  logic dp_idle;
   assign dp_idle = !rd_busy && !wr_busy;
 
   // DMAFLUSHP: the flush request is sent once every earlier transfer (and its

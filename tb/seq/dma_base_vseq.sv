@@ -33,13 +33,17 @@ class dma_base_vseq extends uvm_sequence;
   //============================================================================
   task reg_wr(uvm_reg r, uvm_reg_data_t v);
     uvm_status_e status;
+    p_sequencer.ral_lock.get();
     r.write(status, v, .parent(this));
+    p_sequencer.ral_lock.put();
     if (status != UVM_IS_OK) `uvm_error("REG", {"write failed: ", r.get_name()})
   endtask
 
   task reg_rd(uvm_reg r, output uvm_reg_data_t v);
     uvm_status_e status;
+    p_sequencer.ral_lock.get();
     r.read(status, v, .parent(this));
+    p_sequencer.ral_lock.put();
     if (status != UVM_IS_OK) `uvm_error("REG", {"read failed: ", r.get_name()})
   endtask
 

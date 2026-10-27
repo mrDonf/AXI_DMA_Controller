@@ -13,6 +13,10 @@ precise MFIFO lock-up detection, DMAFLUSHP as a barrier, NS checks of CCR,
 NS-tagged instruction cache, TRM fault codes, AXI attributes and IDs. The
 remaining differences are listed in DESIGN_SPEC section 9.
 
+The `Codex_rtl` fixes add thread-tagged instruction-cache entries, thread-local
+maintenance on DMAWFE invalid / DMAEND / DMAKILL, cancellation of stale fetches,
+and consecutive write bursts without a mandatory idle cycle.
+
 Industry-grade features beyond the basic DMA-330 behaviour:
 
 * hardware AXI protocol protection (an endian swap the data path cannot do
@@ -94,11 +98,23 @@ make cov                                     # regression + merged coverage UCDB
 python run_regression.py -t dma_stress_test -c async --seeds 10 -j 16
 
 python run_mutation.py                       # plant RTL bugs in a copy: old vs new environment
+python run_unit_tests.py                     # 9 directed RTL parameter cases (also run after build)
+python run_unit_tests.py --mutations         # additionally check five planted cache/write bugs
 ```
 
 Speed-ups: one compile, `vopt -j N` parallel code generation, and N
 independent `vsim` processes in parallel (one per test/config/seed). Use
 `--fast` to drop `+acc` visibility for maximum simulation speed.
+
+Regression defaults to one simulation process per logical CPU (24 on the
+current machine). Override with `-j N` or `make regress JOBS=N` when sharing
+the machine. A same-snapshot comparison of 24 mixed test/seed runs took 49 s
+with 12 jobs and 39 s with 24 jobs; both passed 24/24. `--vopt-j` controls build
+code generation separately. After a build, use `--no-build` to reuse snapshots:
+
+```sh
+python run_regression.py --no-build --seeds 3 -j 24
+```
 
 Configurations:
 * `sync`  — every interface on the core clock (CDC logic bypassed)
@@ -124,6 +140,7 @@ registers (`ARCH`).
 | dma_loop2d_test | nested DMALP, DMAADDH / DMAADNH 2D transfers |
 | dma_periph_test | WFP / LDP / STP / FLUSHP / conditional S-B (S = one beat) / DMALPFE + drlast |
 | dma_event_test | DMASEV / DMAWFE ordering, multi-waiter, sticky events |
+| dma_cache_test | same-PC thread isolation, thread-local DMAWFE invalid, running-channel DMAGO NOP, END/KILL reuse |
 | dma_boot_test | manager boots from memory, non-secure channels, debug instruction while the manager waits, dmago_err |
 | dma_fault_test | every fault type (incl. EXOKAY), fault isolation, recovery |
 | dma_kill_test | DMAKILL while transferring / waiting for peripheral / event |
@@ -141,6 +158,11 @@ registers (`ARCH`).
 | dma_security_test | two APB ports, CR3/CR4, NS thread checks (events, peripherals, CCR prot), NS register view, NS-tagged instruction cache |
 
 ## Coverage
+
+The `Codex_rtl` changes passed 150 UVM runs (25 tests, sync/async, seeds 1–3),
+9 directed RTL parameter cases and 5 planted-bug checks. See
+[validation details](docs/RTL_REVIEW_FIXES.md). Coverage below is historical;
+it was not remeasured for these changes.
 
 `make cov` (or `python run_regression.py --cov --seeds 3`) instruments only the
 RTL (`+cover=bcesf`, unreachable case defaults and implicit async-reset FSM

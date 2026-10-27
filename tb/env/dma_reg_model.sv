@@ -157,7 +157,9 @@ class dma_reg_block extends uvm_reg_block;
     dma_reg32 r = dma_reg32::type_id::create(name);
     r.configure(this);
     r.build(access, reset, volatile, width);
-    default_map.add_reg(r, offset, access);
+    // W1C is a field policy. Map rights accept only RO/WO/RW; the field
+    // still retains its W1C prediction and write behaviour.
+    default_map.add_reg(r, offset, access == "W1C" ? "RW" : access);
     return r;
   endfunction
 

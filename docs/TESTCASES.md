@@ -61,9 +61,21 @@ cd sim
 make sim TEST=<test> CFG=sync|async SEED=<n>      # một test
 make gui TEST=<test> CFG=async                      # có waveform
 python run_regression.py -t <test> -c sync async --seeds 5 -j 8
+python run_unit_tests.py                     # independent of UVM; also runs after regression build
+python run_unit_tests.py --mutations         # baseline cases + five expected mutation failures
 ```
 
 ---
+
+### 1.5 Directed RTL unit tests (`tb/unit`)
+
+| Testbench | Cấu hình | Kiểm tra |
+|---|---|---|
+| `dma_icache_tb` | (DATA_W, BEATS) = (32,2), (64,1), (64,4), (128,4); 3 thread, 3 line | Cùng PC khác thread, invalidate riêng thread, invalidate đúng cạnh lookup hit, AR bị stall, từng beat R và RLAST, lỗi refill, retry không cấp phát lại line cũ, tag NS |
+| `dma_fetch_unit_tb` | LINE_BYTES = 8, 32 | Invalidate khi hit/miss/response; lệnh vắt line; retry từ cache; kill/restart đổi PC trước response lỗi cũ |
+| `dma_wr_engine_tb` | DATA_W = 32, 64, 128 | Burst một beat liên tiếp; trừ pop hiện tại khi xét burst kế; swap nhóm rộng hơn beat; handover giữa các kênh; W xong trước AW; AW/W ổn định khi bị stall |
+
+`run_unit_tests.py --mutations` tạo bản sao dưới `sim/logs/unit/mutations`, khôi phục lần lượt năm lỗi và yêu cầu đúng checker tương ứng phát hiện. RTL đang làm việc không bị sửa. Test không có UVM report marker, không có `UNIT TEST PASSED`, hoặc có simulator/SVA error đều bị đánh FAIL bởi runner tương ứng.
 
 ## 2. Bảng tổng hợp
 
@@ -93,8 +105,9 @@ python run_regression.py -t <test> -c sync async --seeds 5 -j 8
 | TC-22 | `dma_cmodel_mix_test` | Random (mọi loại job + chương trình ngẫu nhiên) | trung bình | CM-01..05, AXI-01 |
 | TC-23 | `dma_mfifo_share_test` | Directed | trung bình | MF-01..07, DP-08, FLT-20 |
 | TC-24 | `dma_security_test` | Directed | trung bình | SEC-01..13 |
+| TC-25 | `dma_cache_test` | Directed | ngắn | Cache theo thread, program replacement, DMAGO NOP, END/KILL reuse |
 
-\* Toàn bộ 144 lần chạy (24 test × 2 cấu hình × 3 seed) mất khoảng 3–4 phút với 4 tiến trình song song.
+\* Bản `Codex_rtl`: 150 lần chạy (25 test × 2 cấu hình × 3 seed), 246 s với 12 tiến trình. Các số coverage v1.4 là kết quả lịch sử.
 
 Ma trận test × tính năng:
 

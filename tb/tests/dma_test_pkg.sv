@@ -10,6 +10,7 @@
 //   dma_loop2d_test         nested loops, DMAADDH / DMAADNH 2D transfers
 //   dma_periph_test         peripheral-paced transfers (WFP/LDP/STP/FLUSHP/LPFE)
 //   dma_event_test          DMASEV / DMAWFE between threads, debug DMASEV
+//   dma_cache_test          thread-local cache maintenance, program replacement
 //   dma_boot_test           manager boots from memory, non-secure, dmago_err
 //   dma_fault_test          every fault type, isolation, recovery
 //   dma_kill_test           DMAKILL in every waiting state
@@ -388,6 +389,14 @@ package dma_test_pkg;
     function new(string name, uvm_component parent); super.new(name, parent); endfunction
     virtual function dma_base_vseq create_vseq();
       return dma_mfifo_vseq::type_id::create("vseq");
+    endfunction
+  endclass
+
+  class dma_cache_test extends dma_base_test;
+    `uvm_component_utils(dma_cache_test)
+    function new(string name, uvm_component parent); super.new(name, parent); endfunction
+    virtual function dma_base_vseq create_vseq();
+      return dma_cache_vseq::type_id::create("vseq");
     endfunction
   endclass
 

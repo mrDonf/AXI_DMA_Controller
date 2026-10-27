@@ -43,7 +43,7 @@ OLD_TESTS = [
     "dma_isa_test", "dma_periph_corner_test", "dma_boot_err_test", "dma_reset_test",
     "dma_endian_test", "dma_watchdog_test", "dma_lowpower_test",
 ]
-NEW_TESTS = ["dma_rand_prog_test", "dma_cmodel_mix_test", "dma_mfifo_share_test", "dma_security_test"]
+NEW_TESTS = ["dma_rand_prog_test", "dma_cmodel_mix_test", "dma_mfifo_share_test", "dma_security_test", "dma_cache_test"]
 TWO_RUNS  = {"M1_addh_signext", "M2_lc1_readback", "M3_kill_moves_cpc", "M4_sar_carry31"}
 
 # name: (rtl file, old text, new text, expected occurrences of old text)
@@ -177,8 +177,8 @@ MUTANTS = {
     # Instruction-cache lines are not tagged with the security state
     "M25_icache_no_ns_tag": (
         "rtl/core/dma_icache.sv",
-        "line_tag[w] == cur_tag && line_ns[w] == cur_ns",
-        "line_tag[w] == cur_tag", 1),
+        "line_tid[w] == cur_tid && line_ns[w] == cur_ns",
+        "line_tid[w] == cur_tid", 1),
     # FTRD dmago_err / mgr_evnt_err bit positions swapped
     "M26_ftrd_bits_swapped": (
         "rtl/core/dma330_pkg.sv",
@@ -296,7 +296,9 @@ def main():
 
         t0 = time.time()
         sim = d / "sim"
-        common = [sys.executable, "run_regression.py", "-c", *args.configs, "-j", str(args.jobs)]
+        # This historical comparison measures UVM detection. Directed RTL
+        # mutation checks run separately via run_unit_tests.py --mutations.
+        common = [sys.executable, "run_regression.py", "--skip-unit", "-c", *args.configs, "-j", str(args.jobs)]
         if name in TWO_RUNS:
             out_old = sh([*common, "--vopt-j", str(args.vopt_j), "-t", *OLD_TESTS, "--plusargs", "+NO_CMODEL"],
                          sim, env)

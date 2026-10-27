@@ -139,8 +139,7 @@ module dma330_core
   logic [NUM_THREADS-1:0] ic_req, ic_ns, ic_inv_req, ic_resp_valid;
   logic [ADDR_W-1:0]      ic_addr [NUM_THREADS];
   logic [LINE_W-1:0]      ic_resp_data;
-  logic                   ic_resp_err;
-  logic                   ic_inv_all;
+  logic                   ic_resp_err, ic_resp_retry;
 
   // Events
   logic [NUM_THREADS-1:0] sev_valid, wfe_valid, wfe_hit;
@@ -212,7 +211,6 @@ module dma330_core
   logic [DATA_W-1:0]      icr_r_data;
   logic [1:0]             icr_r_resp;
 
-  assign ic_inv_all = |ic_inv_req;
   assign m_awlock   = 1'b0;
   assign m_arlock   = 1'b0;
 
@@ -309,7 +307,7 @@ module dma330_core
     .boot_manager_ns (boot_manager_ns),
     .irq_ns          (irq_ns),
     .periph_ns       (periph_ns),
-    .ic_inv_all      (ic_inv_all),
+    .ic_inv          (ic_inv_req[MGR]),
     .ic_inv_req      (ic_inv_req[MGR]),
     .ic_req          (ic_req[MGR]),
     .ic_addr         (ic_addr[MGR]),
@@ -317,6 +315,7 @@ module dma330_core
     .ic_resp_valid   (ic_resp_valid[MGR]),
     .ic_resp_data    (ic_resp_data),
     .ic_resp_err     (ic_resp_err),
+    .ic_resp_retry   (ic_resp_retry),
     .go_valid        (go_valid),
     .go_pc           (go_pc),
     .go_ns           (go_ns),
@@ -360,7 +359,7 @@ module dma330_core
       .wd_fault      (wd_lockup_fault[ch]),
       .irq_ns        (irq_ns),
       .periph_ns     (periph_ns),
-      .ic_inv_all    (ic_inv_all),
+      .ic_inv        (ic_inv_req[ch]),
       .ic_inv_req    (ic_inv_req[ch]),
       .ic_req        (ic_req[ch]),
       .ic_addr       (ic_addr[ch]),
@@ -368,6 +367,7 @@ module dma330_core
       .ic_resp_valid (ic_resp_valid[ch]),
       .ic_resp_data  (ic_resp_data),
       .ic_resp_err   (ic_resp_err),
+      .ic_resp_retry (ic_resp_retry),
       .sev_valid     (sev_valid[ch]),
       .sev_event     (sev_event[ch]),
       .wfe_valid     (wfe_valid[ch]),
@@ -424,7 +424,7 @@ module dma330_core
   ) u_icache (
     .clk        (clk),
     .rst_n      (rst_n),
-    .inv_all    (ic_inv_all),
+    .inv        (ic_inv_req),
     .idle       (ic_idle),
     .req        (ic_req),
     .req_addr   (ic_addr),
@@ -432,6 +432,7 @@ module dma330_core
     .resp_valid (ic_resp_valid),
     .resp_data  (ic_resp_data),
     .resp_err   (ic_resp_err),
+    .resp_retry (ic_resp_retry),
     .ar_valid   (icr_ar_valid),
     .ar_ready   (icr_ar_ready),
     .ar_addr    (icr_ar_addr),

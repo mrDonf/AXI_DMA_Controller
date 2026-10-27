@@ -97,8 +97,11 @@ a time from DBGINST0/1; debug instructions are also taken while the manager
 waits in `DMAWFE` (it then returns to the wait). A non-secure manager cannot
 start a secure channel (`dmago_err`, FTRD[4]) or use a secure event
 (`mgr_evnt_err`, FTRD[5]); a missing channel / event number is
-`operand_invalid`. `DMAGO` invalidates the instruction cache so a new program
-is never executed from stale lines.
+`operand_invalid`. An accepted `DMAGO` invalidates only the stopped target
+channel's cache and local line buffer; a running target sees a complete NOP.
+`DMAWFE invalid`, `DMAEND` and `DMAKILL` maintain only the issuing thread.
+Entries carry both thread ID and NS tags. An invalidated lookup/refill returns
+a retry after draining any outstanding AXI read, without allocating old bytes.
 
 ### 4.3 Security
 * Manager: S/NS from `boot_manager_ns` (`DSR.DNS`). Channel: S/NS from the
@@ -107,7 +110,7 @@ is never executed from stale lines.
 * A non-secure channel faults on a secure event (`ch_evnt_err`), a secure
   peripheral (`ch_periph_err`) or a secure access requested in CCR
   (`AxPROT[1]` = 0: `ch_rdwr_err`). NS threads fetch with `ARPROT[1]` = 1 and
-  the instruction cache tags every line with the NS state of its fill.
+  the instruction cache tags every line with its thread ID and the NS state of its fill.
 * The secure APB port sees everything. The non-secure port reads zero / ignores
   writes for secure resources (manager, channels, WD; INTEN/RIS/INTMIS/INTCLR/
   FSRC entirely while the manager is secure, TRM Table 3-1, and their secure
@@ -214,10 +217,12 @@ DMAWFE DMAWFP<S|B|P> DMAWMB`.
 
 ## 9. Differences from Arm DMA-330
 
-Checked against TRM r1p2 (DDI 0424D). v1.4 fixed every functional difference
-a valid program could see (S-form burst length, DMAWFP single/burst, 4 KB
+Checked against TRM r1p2 (DDI 0424D). v1.4 fixed S-form burst length,
+DMAWFP single/burst, 4 KB
 split, load-lock, DMAFLUSHP barrier, NS CCR check, NS-tagged I-cache, fault
-codes, AXI attributes, `PERIPH_ID`, CCR reset, EXOKAY). Remaining:
+codes, AXI attributes, `PERIPH_ID`, CCR reset and EXOKAY. The `Codex_rtl`
+changes add thread-local cache maintenance, cancellation of stale fetches
+and consecutive write bursts. Remaining differences:
 
 | Item | This design |
 |------|-------------|
@@ -227,7 +232,7 @@ codes, AXI attributes, `PERIPH_ID`, CCR reset, EXOKAY). Remaining:
 | NS port with an NS manager | INTEN/RIS/INTMIS/INTCLR/FSRC limited to NS events / channels (stricter than the TRM) |
 | Lock-up | Precise detection per MFIFO line, plus a time-out watchdog (`WD[31:16]`, `WDSTAT`) for hung buses |
 | Write bursts | A write burst starts only when all its data is in the MFIFO |
-| `DMAGO` | Invalidates the whole instruction cache (functionally correct) |
+| `DMAGO` | Invalidates only a stopped target channel on start; a running target is a complete NOP |
 | Interfaces | AXI4 instead of AXI3 (no WID), ARID all ones for instruction fetches, optional APB async bridge instead of `pclken`, request latch of depth 1 per peripheral |
 | Extensions | `FARn` (0x060+4n), `WDSTAT` (0xE84), `WD[31:16]`, Q-Channel, optional `PSLVERR` (`APB_SLVERR`) |
 | Configuration limits | MFIFO >= 32 lines; I-cache line a power of two >= 8 bytes; swap group <= bus width |

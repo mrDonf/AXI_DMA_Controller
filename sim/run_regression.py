@@ -44,6 +44,7 @@ TESTS = [
     "dma_loop2d_test",
     "dma_periph_test",
     "dma_event_test",
+    "dma_cache_test",
     "dma_boot_test",
     "dma_fault_test",
     "dma_kill_test",
@@ -196,10 +197,11 @@ def main():
     ap.add_argument("-c", "--configs", nargs="+", default=list(CONFIGS), choices=list(CONFIGS))
     ap.add_argument("--seeds", type=int, default=1, help="seeds per test/config")
     ap.add_argument("--seed-base", type=int, default=1)
-    ap.add_argument("-j", "--jobs", type=int, default=max(1, (os.cpu_count() or 2) // 2),
-                    help="parallel simulations")
+    ap.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 1,
+                    help="parallel simulations (default: logical CPU count)")
     ap.add_argument("--vopt-j", type=int, default=8, help="vopt parallel code generation")
     ap.add_argument("--no-build", action="store_true")
+    ap.add_argument("--skip-unit", action="store_true", help="skip directed RTL unit tests after build")
     ap.add_argument("--no-cmodel", action="store_true",
                     help="build without the DPI-C reference model (its tests are skipped)")
     ap.add_argument("--cov", action="store_true", help="code + functional coverage, merged UCDB")
@@ -217,6 +219,9 @@ def main():
     else:
         args.cmodel = not args.no_cmodel and build_model()
         build(args)
+        if not args.skip_unit:
+            import run_unit_tests
+            run_unit_tests.main([])
     if not args.cmodel:
         skipped = [t for t in args.tests if t in CMODEL_TESTS]
         if skipped:

@@ -173,7 +173,9 @@ endmodule
 //------------------------------------------------------------------------------
 // Channel thread: transfer requests only while executing; never both at once.
 //------------------------------------------------------------------------------
-module sva_channel (
+module sva_channel
+  import dma330_pkg::*;
+(
   input logic clk,
   input logic rst_n,
   input logic ld_valid,
@@ -181,7 +183,10 @@ module sva_channel (
   input logic sev_valid,
   input logic flush_valid,
   input logic dp_flush,
-  input logic faulting
+  input logic faulting,
+  input logic [3:0] status,
+  input logic dp_idle,
+  input logic ic_inv_req
 );
   default clocking cb @(posedge clk); endclocking
   default disable iff (!rst_n);
@@ -189,7 +194,30 @@ module sva_channel (
   CH_ONE_REQ:          assert property (!(ld_valid && st_valid));
   CH_NO_REQ_FLUSHING:  assert property ((ld_valid || st_valid) |-> !dp_flush);
   CH_FAULT_FLUSHES:    assert property (faulting |-> dp_flush);
+  CH_END_KILL_INVALIDATE: assert property (
+      (status inside {ST_COMPLETING, ST_KILLING}) && dp_idle |-> ic_inv_req);
+  CH_C_END_INVALIDATE: cover property (status == ST_COMPLETING && dp_idle && ic_inv_req);
+  CH_C_KILL_INVALIDATE: cover property (status == ST_KILLING && dp_idle && ic_inv_req);
   CH_C_LD_ST:          cover  property (ld_valid ##[1:20] st_valid);
+endmodule
+
+// Manager DMAEND/DMAKILL have no data transactions to drain. The faulted
+// manager's debug DMAKILL takes a separate path from normal execution.
+module sva_manager_cache
+  import dma330_pkg::*;
+(
+  input logic clk, rst_n, in_exec_ok, ic_inv_req, faulting, dbg_valid,
+  input insn_e cls,
+  input logic [INSN_W-1:0] dbg_insn
+);
+  default clocking cb @(posedge clk); endclocking
+  default disable iff (!rst_n);
+  MGR_END_KILL_INVALIDATE: assert property (
+      in_exec_ok && (cls inside {I_END, I_KILL}) |-> ic_inv_req);
+  MGR_FAULT_KILL_INVALIDATE: assert property (
+      faulting && dbg_valid && decode_op(dbg_insn[7:0]) == I_KILL |-> ic_inv_req);
+  MGR_C_END_INVALIDATE: cover property (in_exec_ok && cls == I_END && ic_inv_req);
+  MGR_C_KILL_INVALIDATE: cover property (in_exec_ok && cls == I_KILL && ic_inv_req);
 endmodule
 
 //------------------------------------------------------------------------------

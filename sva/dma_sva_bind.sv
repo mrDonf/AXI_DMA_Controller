@@ -19,5 +19,6 @@ module dma_sva_bind;
   bind dma_wr_engine     sva_wr_engine u_sva_wr (.*);
 
   bind dma_channel       sva_channel u_sva_ch (.*);
+  bind dma_manager       sva_manager_cache u_sva_mgr_cache (.*);
 
 endmodule : dma_sva_bind

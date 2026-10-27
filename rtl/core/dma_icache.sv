@@ -6,15 +6,17 @@
 //   * Fully associative, NUM_LINES lines of LINE_BEATS x DATA_W bits
 //   * Round-robin replacement, blocking (one lookup / refill at a time)
 //   * Requests from the threads' fetch units are served round robin
-//   * Each line is tagged with the security state of the fetch that filled
-//     it: a secure and a non-secure thread never share a line, even at the
-//     same address (TRM 2.9: a non-secure thread only fetches non-secure)
+//   * Each line is tagged with its thread and security state. Threads do not
+//     share entries: DMAWFE invalid, DMAEND and DMAKILL invalidate only the
+//     issuing thread (TRM 4.3.3, 4.3.6, 4.3.19).
 //   * Refill uses one AXI INCR burst with ARID = IFETCH_ID (all ones),
 //     privileged instruction access, cacheable write-through read-allocate
 //     (TRM Table 2-1)
 //   * A refill with a response other than OKAY is returned as an error and is
 //     not allocated
-//   * inv_all clears every valid bit (DMAGO / DMAWFE with invalidate)
+//   * inv[t] invalidates thread t, including any lookup/refill in flight.
+//     A cancelled refill still drains AXI, then responds with resp_retry so
+//     the fetch unit can retry without executing stale bytes or faulting.
 //
 //   IC_IDLE --arbitrate--> IC_LOOKUP --hit--> respond --> IC_IDLE
 //                              |miss
@@ -31,7 +33,7 @@ module dma_icache
 ) (
   input  logic                          clk,
   input  logic                          rst_n,
-  input  logic                          inv_all,
+  input  logic [NUM_THREADS-1:0]        inv,
   output logic                          idle,       // no lookup / refill in progress
 
   // Thread fetch units
@@ -41,6 +43,7 @@ module dma_icache
   output logic [NUM_THREADS-1:0]        resp_valid,
   output logic [LINE_BEATS*DATA_W-1:0]  resp_data,
   output logic                          resp_err,
+  output logic                          resp_retry,
 
   // AXI refill (through the read engine)
   output logic                          ar_valid,
@@ -72,6 +75,7 @@ module dma_icache
   logic [NUM_LINES-1:0] line_valid;
   logic [TAG_W-1:0]     line_tag  [NUM_LINES];
   logic [NUM_LINES-1:0] line_ns;
+  logic [TID_W-1:0]     line_tid [NUM_LINES];
   logic [LINE_W-1:0]    line_data [NUM_LINES];
   logic [WAY_W-1:0]     victim;
 
@@ -82,6 +86,14 @@ module dma_icache
   logic [LINE_W-1:0]    fill_buf;
   logic [BEAT_W-1:0]    fill_beat;
   logic                 fill_err;
+  logic                 cur_invalid;
+  logic                 cancelled;
+  logic                 fill_commit;
+  logic                 r_bad; // EXOKAY / SLVERR / DECERR
+
+  assign cancelled = cur_invalid || inv[cur_tid];
+  assign fill_commit = (state == IC_R) && r_valid && r_last &&
+                       !(fill_err | r_bad) && !cancelled;
 
   //----------------------------------------------------------------------------
   // Request arbitration
@@ -96,7 +108,7 @@ module dma_icache
   dma_rr_arbiter #(.N(NUM_THREADS)) u_arb (
     .clk       (clk),
     .rst_n     (rst_n),
-    .req       (req & ~resp_valid),   // a thread just served is not re-taken
+    .req       (req & ~resp_valid & ~inv),
     .advance   (arb_take),
     .gnt       (arb_gnt),
     .gnt_idx   (arb_idx),
@@ -113,7 +125,8 @@ module dma_icache
     hit     = 1'b0;
     hit_way = '0;
     for (int w = 0; w < NUM_LINES; w++) begin
-      if (!hit && line_valid[w] && line_tag[w] == cur_tag && line_ns[w] == cur_ns) begin
+      if (!hit && line_valid[w] && line_tag[w] == cur_tag &&
+          line_tid[w] == cur_tid && line_ns[w] == cur_ns) begin
         hit     = 1'b1;
         hit_way = WAY_W'(w);
       end
@@ -123,7 +136,6 @@ module dma_icache
   //----------------------------------------------------------------------------
   // AXI refill request / data
   //----------------------------------------------------------------------------
-  logic r_bad;                                     // EXOKAY / SLVERR / DECERR
   assign r_bad = (r_resp != 2'b00);
 
   assign ar_valid = (state == IC_AR);
@@ -149,10 +161,15 @@ module dma_icache
       cur_ns     <= 1'b0;
       fill_beat  <= '0;
       fill_err   <= 1'b0;
+      cur_invalid <= 1'b0;
       resp_valid <= '0;
       resp_err   <= 1'b0;
+      resp_retry <= 1'b0;
+      for (int w = 0; w < NUM_LINES; w++) line_tid[w] <= '0;
     end else begin
       resp_valid <= '0;
+      resp_retry <= 1'b0;
+      if (state != IC_IDLE && inv[cur_tid]) cur_invalid <= 1'b1;
 
       case (state)
         IC_IDLE: begin
@@ -160,14 +177,16 @@ module dma_icache
             cur_tid <= arb_idx;
             cur_tag <= req_addr[arb_idx][ADDR_W-1:LINE_LSB];
             cur_ns  <= req_ns[arb_idx];
+            cur_invalid <= 1'b0;
             state   <= IC_LOOKUP;
           end
         end
 
         IC_LOOKUP: begin
-          if (hit) begin
+          if (cancelled || hit) begin
             resp_valid[cur_tid] <= 1'b1;
             resp_err            <= 1'b0;
+            resp_retry          <= cancelled;
             state               <= IC_IDLE;
           end else begin
             fill_beat <= '0;
@@ -186,12 +205,14 @@ module dma_icache
             fill_err  <= fill_err | r_bad;
             if (r_last) begin
               resp_valid[cur_tid] <= 1'b1;
-              resp_err            <= fill_err | r_bad;
+              resp_err            <= !cancelled && (fill_err | r_bad);
+              resp_retry          <= cancelled;
               state               <= IC_IDLE;
-              if (!(fill_err | r_bad)) begin
+              if (!(fill_err | r_bad) && !cancelled) begin
                 line_valid[victim] <= 1'b1;
                 line_tag[victim]   <= cur_tag;
                 line_ns[victim]    <= cur_ns;
+                line_tid[victim]   <= cur_tid;
                 victim             <= (int'(victim) == NUM_LINES - 1) ? '0 : victim + 1'b1;
               end
             end
@@ -201,7 +222,9 @@ module dma_icache
         default: state <= IC_IDLE;
       endcase
 
-      if (inv_all) line_valid <= '0;
+      for (int w = 0; w < NUM_LINES; w++)
+        if (line_valid[w] && inv[line_tid[w]] &&
+            !(fill_commit && victim == WAY_W'(w))) line_valid[w] <= 1'b0;
     end
   end
 
@@ -209,7 +232,7 @@ module dma_icache
   always_ff @(posedge clk) begin
     if (state == IC_R && r_valid) begin
       fill_buf[fill_beat*DATA_W +: DATA_W] <= r_data;
-      if (r_last && !(fill_err | r_bad))
+      if (r_last && !(fill_err | r_bad) && !cancelled)
         line_data[victim] <= fill_buf_with_last();
     end
     if (state == IC_LOOKUP && hit)

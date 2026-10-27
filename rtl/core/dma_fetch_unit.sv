@@ -41,7 +41,8 @@ module dma_fetch_unit
   output logic [ADDR_W-1:0]         ic_addr,      // line aligned
   input  logic                      ic_resp_valid,
   input  logic [LINE_BYTES*8-1:0]   ic_resp_data,
-  input  logic                      ic_resp_err
+  input  logic                      ic_resp_err,
+  input  logic                      ic_resp_retry // invalidated cache request: retry
 );
 
   localparam int LINE_LSB = $clog2(LINE_BYTES);
@@ -101,13 +102,13 @@ module dma_fetch_unit
       insn_valid <= 1'b0;
       fetch_err  <= 1'b0;
 
-      if (fstate != F_IDLE && !fetch_req)
+      if (fstate != F_IDLE && (!fetch_req || inv))
         aborted <= 1'b1;
 
       case (fstate)
         F_IDLE: begin
           // Do not start a new fetch in the cycle the previous result is seen
-          if (fetch_req && !insn_valid && !fetch_err) begin
+          if (fetch_req && !insn_valid && !fetch_err && !inv) begin
             aborted <= 1'b0;
             if (!hit) begin
               req_tag <= pc_tag;
@@ -125,12 +126,14 @@ module dma_fetch_unit
         F_MISS: begin
           if (ic_resp_valid) begin
             fstate <= F_IDLE;
-            if (ic_resp_err) begin
-              fetch_err <= fetch_req && !aborted;
-            end else begin
-              lb_valid <= 1'b1;
-              lb_tag   <= req_tag;
-              lb_data  <= ic_resp_data;
+            if (fetch_req && !aborted && !inv && !ic_resp_retry) begin
+              if (ic_resp_err) begin
+                fetch_err <= 1'b1;
+              end else begin
+                lb_valid <= 1'b1;
+                lb_tag   <= req_tag;
+                lb_data  <= ic_resp_data;
+              end
             end
           end
         end
@@ -138,16 +141,16 @@ module dma_fetch_unit
         F_NEXT: begin
           if (ic_resp_valid) begin
             fstate <= F_IDLE;
-            if (ic_resp_err) begin
-              fetch_err <= fetch_req && !aborted;
-            end else begin
-              if (fetch_req && !aborted) begin
+            if (fetch_req && !aborted && !inv && !ic_resp_retry) begin
+              if (ic_resp_err) begin
+                fetch_err <= 1'b1;
+              end else begin
                 insn       <= assemble(lb_data, ic_resp_data, pc_off);
                 insn_valid <= 1'b1;
+                lb_valid <= 1'b1;
+                lb_tag   <= req_tag;
+                lb_data  <= ic_resp_data;
               end
-              lb_valid <= 1'b1;
-              lb_tag   <= req_tag;
-              lb_data  <= ic_resp_data;
             end
           end
         end
@@ -155,8 +158,13 @@ module dma_fetch_unit
         default: fstate <= F_IDLE;
       endcase
 
-      // Invalidate has priority over a concurrent line fill
-      if (inv) lb_valid <= 1'b0;
+      // Invalidate suppresses delivery as well as allocation. A pending
+      // cache request is drained, but its late response cannot revive lb.
+      if (inv) begin
+        lb_valid   <= 1'b0;
+        insn_valid <= 1'b0;
+        fetch_err  <= 1'b0;
+      end
     end
   end
 

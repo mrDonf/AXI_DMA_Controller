@@ -5,7 +5,7 @@
 | Tên IP | `axi_dma330` (top), `dma330_core` (lõi đơn clock) |
 | Tham chiếu | Arm CoreLink DMA-330 (PL330) TRM — tập lệnh, register map, giao thức peripheral |
 | Ngôn ngữ | SystemVerilog-2012 (synthesizable) |
-| Phiên bản tài liệu | 1.4 (sửa các khác biệt so với TRM DMA-330 r1p2: lệnh hậu tố S một beat, DMAWFP single/burst, tự tách burst 4 KB, load-lock + phát hiện lock-up chính xác, DMAFLUSHP là barrier, CCR NS, tag NS của I-cache, mã lỗi, thuộc tính AXI, `PERIPH_ID`, reset CCR, reset CDC). 1.3: lõi chạy bằng `aclk`, MFIFO dùng chung cấp phát động, security hai cổng APB + `CR3`/`CR4`. 1.1: bảo vệ giao thức AXI, endian swap, watchdog, FAR, Q-Channel, PSLVERR |
+| Phiên bản tài liệu | 1.5 (cache theo thread, bỏ fetch cũ khi invalidate, invalidate END/KILL, burst ghi liên tiếp). 1.4 (sửa các khác biệt so với TRM DMA-330 r1p2: lệnh hậu tố S một beat, DMAWFP single/burst, tự tách burst 4 KB, load-lock + phát hiện lock-up chính xác, DMAFLUSHP là barrier, CCR NS, tag NS của I-cache, mã lỗi, thuộc tính AXI, `PERIPH_ID`, reset CCR, reset CDC). 1.3: lõi chạy bằng `aclk`, MFIFO dùng chung cấp phát động, security hai cổng APB + `CR3`/`CR4`. 1.1: bảo vệ giao thức AXI, endian swap, watchdog, FAR, Q-Channel, PSLVERR |
 | Tài liệu liên quan | [VERIFICATION_PLAN.md](VERIFICATION_PLAN.md), [TESTCASES.md](TESTCASES.md), [ARCHITECTURE.md](ARCHITECTURE.md) (tóm tắt tiếng Anh) |
 
 Quy ước: tên tín hiệu, thanh ghi, lệnh giữ nguyên tiếng Anh. `aclk` là clock của lõi DMA và cổng AXI (trong `dma330_core` gọi là `clk`). "Thread" là một luồng thực thi chương trình (manager hoặc channel). "S"/"NS" là secure/non-secure. Số hex viết `0x...`, số bit viết `[msb:lsb]`.
@@ -295,8 +295,8 @@ SVA kiểm tra payload ổn định trong lúc handshake (`CDC_DATA_STABLE`).
   * số kênh ≥ `NUM_CH` → `operand_invalid`;
   * manager non-secure mà `DMAGO` yêu cầu kênh secure (`ns=0`) → `dmago_err`. Quy tắc này theo security của manager, không theo cổng gửi lệnh debug.
 * `DMASEV`/`DMAWFE` với số event ≥ `NUM_EVENTS` → `operand_invalid`; manager non-secure với event secure (`CR3[e] = 0`) → `mgr_evnt_err`.
-* `DMAGO` hợp lệ làm hai việc: phát `go_valid` tới kênh, và **invalidate toàn bộ instruction cache cùng line buffer của mọi thread**. Nhờ vậy kênh không bao giờ chạy code cũ.
-* Nếu kênh không ở trạng thái Stopped, `DMAGO` bị kênh bỏ qua (như DMA-330).
+* `DMAGO` hợp lệ phát `go_valid` tới kênh. Khi kênh đang Stopped nhận lệnh, chỉ instruction cache và line buffer của kênh đích bị invalidate. Manager và các kênh khác giữ nguyên cache.
+* Nếu kênh không ở trạng thái Stopped, `DMAGO` là NOP, bao gồm cả việc không invalidate cache.
 
 ### 4.5 Channel thread — `dma_channel`
 
@@ -360,14 +360,15 @@ Trạng thái kiến trúc của mỗi kênh: `PC (CPC)`, `SAR`, `DAR`, `CCR`, `
 * **Fetch unit** (mỗi thread một bộ): giữ một line (`IC_BEATS*DATA_W/8` byte, mặc định 32 B).
   * Lệnh nằm trọn trong line → trả lệnh ở chu kỳ sau.
   * Lệnh vắt sang line kế tiếp (lệnh dài tối đa 6 byte) → đọc thêm line sau rồi ghép lại.
-  * Nếu thread bỏ `fetch_req` khi đang miss (bị kill), kết quả trả về muộn sẽ bị bỏ (cờ `aborted`).
+  * Nếu thread bỏ `fetch_req` hoặc nhận invalidate khi đang miss, kết quả trả về muộn bị bỏ (cờ `aborted`): không phát lệnh/lỗi và không nạp lại line buffer cũ. Lệnh vắt qua hai line phải fetch lại từ line đầu.
 * **I-cache**:
   * Fully associative, `IC_LINES` line, thay thế round-robin, blocking: mỗi lần chỉ xử lý một lookup hoặc refill.
-  * Mỗi line được tag thêm bit NS của lần fetch đã nạp nó; lookup chỉ trúng khi cả địa chỉ và NS khớp. Thread secure và thread NS không bao giờ dùng chung một line, kể cả cùng địa chỉ (TRM 2.9: thread NS chỉ fetch non-secure).
+  * Mỗi line được tag bằng thread ID và bit NS của lần fetch đã nạp nó; lookup chỉ trúng khi địa chỉ, thread ID và NS đều khớp. Hai thread không dùng chung entry, kể cả khi cùng địa chỉ và security, nên một thread không lấy lại code cũ do thread khác refill.
   * Các thread được phục vụ theo round-robin.
   * Refill dùng một burst INCR, `ARLEN = IC_BEATS-1`, `ARSIZE` bằng độ rộng bus, `ARID` toàn bit 1, `ARPROT = {1, NS, 1}` (instruction, privileged), `ARCACHE = 0110`.
   * Refill có `RRESP ≠ OKAY` ở bất kỳ beat nào → thread nhận `fetch_err`, line không được ghi vào cache.
-* **Invalidate**: `DMAGO`, hoặc `DMAWFE` có cờ invalidate (byte1[1]) ở bất kỳ thread nào, sẽ xóa toàn bộ valid bit của cache và line buffer.
+* **Invalidate theo thread** (TRM 4.3.3, 4.3.6, 4.3.19): `DMAWFE` có cờ invalidate chỉ xóa cache và line buffer của thread phát lệnh. `DMAEND`/`DMAKILL` cũng invalidate thread đó khi kết thúc; với kênh, thời điểm này là sau khi datapath đã hoàn tất. Khởi động một kênh Stopped bằng `DMAGO` cũng invalidate riêng kênh đích.
+* **Lookup/refill đang dở**: invalidate đánh dấu request hiện tại là cũ. AXI AR đã phát vẫn được giữ tới handshake và các beat R được drain đầy đủ; kết quả cũ không được cấp phát cache và trả `resp_retry`, không phải `fetch_err`. Fetch unit bỏ response cũ rồi thử lại. Invalidate trùng lookup hit hoặc beat R cuối cũng có ưu tiên cao hơn trả dữ liệu/cấp phát line.
 
 ### 4.7 Datapath — `dma_datapath`
 
@@ -446,7 +447,7 @@ Hệ quả của việc dùng chung: một kênh chiếm gần hết pool làm c
 * **Một burst chỉ được bắt đầu khi toàn bộ dữ liệu của nó đã nằm trong MFIFO** (hoặc là `DMASTZ`). Nhờ vậy W không bao giờ chờ R. Một kênh chậm không thể chặn kênh W dùng chung, nên không có head-of-line blocking và không có deadlock.
 * Chọn burst kế tiếp: round-robin giữa các kênh đã đủ dữ liệu, B tracker chưa đầy và không bị flush.
 * **Tách 4 KB**: như phía đọc, request ở đầu WQ mà burst INCR vượt biên 4 KB được phát thành hai burst AW/W (`xfer_piece`); request rời WQ khi mảnh 1 bắt đầu. Mỗi mảnh có một entry B tracker; chỉ mảnh 1 mang ack `DMASTP`. Mảnh 0 chỉ cần đủ dữ liệu của chính nó.
-* AW và W của burst đang chạy được phát song song (AXI cho phép bên nào đi trước cũng được). Trên W mỗi lúc chỉ có một burst; giữa hai burst có 1 chu kỳ nghỉ.
+* AW và W của burst đang chạy được phát song song (AXI cho phép bên nào đi trước cũng được). Trên W mỗi lúc chỉ có một burst; có thể chọn burst kế tiếp ngay tại cạnh hoàn tất burst hiện tại, không bắt buộc có chu kỳ nghỉ. Khi xét đủ dữ liệu cho burst kế tiếp, phải trừ byte được pop trong chu kỳ hiện tại (cả nhóm nếu swap rộng hơn beat). Nếu AW còn bị chặn hoặc burst kế tiếp chưa đủ dữ liệu/B tracker đầy, đường ghi vẫn phải chờ.
 * `WSTRB = ((1 << nbytes) - 1) << lane`. Byte lane không có strobe có `WDATA = 0`, để `WDATA` luôn ổn định khi chờ `WREADY`.
 * **Endian swap**: nếu `CCR.endian_swap = k ≠ 0` lúc `DMAST`, mỗi nhóm `g = 2^k` byte liên tiếp của burst (bắt đầu từ `DAR`, đã align theo `g`) được đảo thứ tự byte: byte i của nhóm chuyển sang vị trí `i XOR (g − 1)`.
   * `g` ≤ beat: mỗi beat chứa trọn các nhóm; đảo trên `WDATA` bằng đi dây cố định và một mux 5 ngõ.
@@ -564,7 +565,7 @@ Với mỗi peripheral `p`:
   | DBGINST0/1 ------>|                   |                     |                    |
   | DBGCMD = 0 ------>| dbg_mgr_busy=1 -->| M_STOPPED->M_EXEC   |                    |
   |                   |                   | DMAGO: go_valid[n] ->| C_STOPPED->C_FETCH |
-  |                   |                   | ic_inv_all ---------------------------------> invalidate
+  |                   |                   |                     | ic_inv_req[n] ----> invalidate n
   |                   |<-- dbg_done ------| -> M_STOPPED        | fetch miss -------> AR (ARID=1111)
   | DBGSTATUS=0 <-----|                   |                     |<------ line ------ R x IC_BEATS
   |                   |                   |                     | EXEC DMAMOV ...    |
@@ -574,7 +575,7 @@ Với mỗi peripheral `p`:
 2. CPU ghi `DBGINST0` (byte 0..1 của lệnh, chọn thread manager), `DBGINST1` (byte 2..5), rồi ghi `DBGCMD = 0`.
 3. Manager thực thi `DMAGO`, sau đó:
    * kênh n nhận PC và NS, xóa `FTR` và các cờ request, chuyển sang `C_FETCH`;
-   * cache bị invalidate;
+   * cache và line buffer của riêng kênh n bị invalidate;
    * manager quay về `Stopped` và `DBGSTATUS` trở về 0.
 4. Kênh fetch lệnh đầu tiên (cache miss → refill qua AR với ưu tiên cao nhất), rồi thực thi tuần tự.
 
@@ -1261,7 +1262,7 @@ Phần mềm DMA không cần thay đổi: một truy cập APB trong lúc DMA �
 6b. **Peripheral**: `DMALDS`/`DMASTS`/`DMALDPS`/`DMASTPS` chuyển một beat; dùng dạng `B` (hoặc không hậu tố) cho burst `CCR`. `DMAWFP B` bỏ request single, `DMAWFP S` để lại request burst cho lệnh `DMAWFP` sau. `DMAFLUSHP` chỉ dùng trong chương trình kênh.
 7. **DMALPFE có điều kiện** dùng mã LC1.
 8. **Kết thúc bằng `DMAWMB; DMASEV; DMAEND`** nếu interrupt phải có nghĩa là dữ liệu đã ghi xong.
-9. **Chương trình phải có mặt trong bộ nhớ trước `DMAGO`**. Với CPU có D-cache, phải clean cache trước. `DMAGO` tự invalidate instruction cache của DMA.
+9. **Chương trình phải có mặt trong bộ nhớ trước `DMAGO`**. Với CPU có D-cache, phải clean cache trước. `DMAGO` khởi động kênh Stopped tự invalidate instruction cache của riêng kênh đó; thay code của thread đang chạy cần đồng bộ bằng `DMAWFE ..., invalid`.
 10. **Peripheral**: bắt đầu bằng `DMAFLUSHP P` để xóa request cũ và đồng bộ với peripheral.
 11. **Vùng chương trình** của mỗi kênh không được bị ghi đè trong khi kênh đang chạy.
 
@@ -1275,7 +1276,7 @@ DMA không có bit soft reset. Có hai cách khởi tạo lại:
 
 ## 9. Khác biệt so với Arm DMA-330 và giới hạn
 
-Đối chiếu với TRM DMA-330 r1p2 (DDI 0424D). Từ v1.4 các khác biệt chức năng mà chương trình hợp lệ nhận ra được (độ dài lệnh `S`, `DMAWFP S/B`, tách 4 KB, load-lock, barrier của `DMAFLUSHP`, `CCR` của kênh NS, tag NS của I-cache, mã lỗi, thuộc tính AXI, `PERIPH_ID`, reset `CCR`, EXOKAY) đã được sửa. Phần còn lại:
+Đối chiếu với TRM DMA-330 r1p2 (DDI 0424D). v1.4 đã sửa các mục (độ dài lệnh `S`, `DMAWFP S/B`, tách 4 KB, load-lock, barrier của `DMAFLUSHP`, `CCR` của kênh NS, tag NS của I-cache, mã lỗi, thuộc tính AXI, `PERIPH_ID`, reset `CCR`, EXOKAY) đã được sửa. Phần còn lại:
 
 **Khác biệt chức năng còn lại**
 
@@ -1287,7 +1288,7 @@ DMA không có bit soft reset. Có hai cách khởi tạo lại:
 | Lọc cổng NS khi manager NS | `INTEN`/`RIS`/`INTMIS`/`INTCLR`/`FSRC` chỉ hiện bit của event/kênh NS (6.5) | Cả thanh ghi |
 | Lock-up | Phát hiện chính xác theo line MFIFO (một kênh chỉ chờ load-lock mà không giữ line thì không bị abort); thêm watchdog theo thời gian (`WD[31:16]`, `WDSTAT`) cho bus treo | Phát hiện khi mọi kênh đang chạy đều kẹt ở `DMALD` |
 | Ghi burst | Chỉ bắt đầu burst ghi khi toàn bộ dữ liệu của burst đã nằm trong MFIFO (4.7.4) | TRM 2.10.7: tương tự ("không phát AW trước khi đọc đủ dữ liệu") |
-| `DMAGO` | Invalidate toàn bộ instruction cache và line buffer của mọi thread, kể cả khi kênh đích đang chạy (khi đó `DMAGO` là NOP). Đúng chức năng, chỉ tốn hiệu năng của kênh khác | TRM không nêu |
+| `DMAGO` | Khi khởi động kênh Stopped, invalidate riêng kênh đích; kênh đang chạy nhận NOP hoàn toàn | TRM mô tả cập nhật PC/security/state; `DMAEND`/`DMAKILL` đã invalidate cache khi dừng thread |
 | `DMALPFE` có điều kiện | Chỉ dùng được mã LC1 (`0x2D`/`0x2F`), vì `0x29`/`0x2B` được decode là `DMASTP`. `0x2A` (bs=1, x=0) là `DMALPFE` LC0 không điều kiện, tương đương `0x28` | |
 | Status code 3 (Updating PC) | Không dùng | |
 

@@ -13,6 +13,7 @@ package dma_seq_pkg;
   `include "dma_reg_vseq.sv"
   `include "dma_traffic_vseq.sv"
   `include "dma_event_vseq.sv"
+  `include "dma_cache_vseq.sv"
   `include "dma_boot_vseq.sv"
   `include "dma_fault_vseq.sv"
   `include "dma_kill_vseq.sv"
