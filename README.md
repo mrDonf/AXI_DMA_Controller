@@ -92,7 +92,7 @@ make model                                   # C model: unit test + DPI library
 make build                                   # model + vlog + vopt (sync and async snapshots)
 make sim TEST=dma_periph_test CFG=async SEED=5
 make gui TEST=dma_fault_test                 # waveforms
-make regress JOBS=12 SEEDS=3                 # parallel regression
+make regress JOBS=4 SEEDS=3                  # parallel regression (max 4)
 make cov                                     # regression + merged coverage UCDB
 
 python run_regression.py -t dma_stress_test -c async --seeds 10 -j 16

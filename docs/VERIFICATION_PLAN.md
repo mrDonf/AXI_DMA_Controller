@@ -488,7 +488,7 @@ Plusargs:
 cd sim
 make build                                  # vlog 1 lần + vopt cho 2 snapshot (sync, async)
 make sim TEST=dma_fault_test CFG=async SEED=7
-make regress JOBS=12 SEEDS=3                # regression song song
+make regress JOBS=4 SEEDS=3                 # regression song song (tối đa 4)
 make cov                                    # regression + coverage merge + HTML
 python run_regression.py -t dma_stress_test -c async --seeds 10 -j 16
 ```
@@ -519,7 +519,21 @@ python run_regression.py -t dma_stress_test -c async --seeds 10 -j 16
 
 **Bản sửa `Codex_rtl`, 2026-10-27:** 150/150 lượt UVM PASS (25 test × sync/async × seed 1–3), C model 173/173 kiểm tra PASS. Thêm `dma_cache_test`, 9 cấu hình unit RTL và kiểm tra 5 mutation cache/fetch/write. Các assertion mới kiểm tra invalidate khi END/KILL ở manager và channel. Xem [RTL_REVIEW_FIXES.md](RTL_REVIEW_FIXES.md) để biết lệnh chạy, phạm vi tham số và giới hạn xác nhận.
 
-**Kết quả coverage lịch sử v1.4** (24 test × sync/async × 3 seed; chưa đo lại coverage sau bản sửa `Codex_rtl`):
+**Bản `Claude_rtl`, 2026-10-27** (review bản sửa `Codex_rtl`, sửa `dma_wr_engine` để việc chọn burst không phụ thuộc `WREADY`, thêm assertion `FU_NO_INV_WHILE_FETCHING`, bổ sung unit test đường hủy `F_NEXT`): 150/150 lượt UVM PASS, 9/9 cấu hình unit PASS, 6/6 mutation unit bị phát hiện, không có UVM warning. Coverage UVM (25 test × 2 cấu hình × 3 seed):
+
+| Chỉ số | Kết quả | Đạt |
+|---|---|---|
+| Statement | 99.90 % (1027/1028) | ✔ (swap 128 bit, 9.3) |
+| Branch | 99.40 % (670/674) | ✔ |
+| FEC condition | 88.95 % (161/181) | ✔ có giải thích: 9 term thiếu thuộc đường hủy fetch/refill mới (9.3), đều được unit test phủ; 11 term còn lại như v1.4 |
+| FEC expression | 96.83 % (367/379) | ✔ |
+| FSM state / transition | 100 % (19/19) / 100 % (28/28) | ✔ |
+| Covergroup bin / cover directive | 100 % (188/188) / 100 % (55/55) | ✔ |
+| Assertion | 165, 0 fail; 160 đã pass ít nhất một lần | ✔ (5 vacuous như cũ) |
+
+Coverage unit test được báo riêng (`python run_unit_tests.py --cov` hoặc `run_regression.py --cov`: `sim/cov/unit/merged.ucdb`, `logs/cov_unit_summary.txt`), không gộp vào UCDB của UVM vì unit test dùng giá trị tham số khác (DATA_W 32/128, 3 thread) nên vcover xem là mã khác.
+
+**Kết quả coverage lịch sử v1.4** (24 test × sync/async × 3 seed):
 
 | Chỉ số | Kết quả | Đạt |
 |---|---|---|
@@ -638,6 +652,7 @@ Lần chạy đầu, mutation "không giữ `PREADY`" không bị phát hiện. 
 | Lỗi dữ liệu khi kênh đã ở `FAULTING` | Kênh chỉ vào Faulting khi mọi burst đã retire |
 | `dbg_fault` khi kênh đang `FAULT_COMPLETING` | Cửa sổ thời gian vài chu kỳ; hành vi giống trường hợp Faulting (đã test) |
 | Fetch unit: kill rồi khởi động lại trước khi response I-cache về | Đã có directed test `dma_fetch_unit_tb`: đổi PC trước response cũ, bỏ lỗi/fill cũ rồi fetch đúng PC mới |
+| FEC condition của đường hủy fetch/refill (`dma_fetch_unit` dòng 105/129/144, `dma_icache` dòng 128/186): `inv` khi đang fetch, response bị hủy (`aborted`/retry) ở `F_MISS`/`F_NEXT`, `fetch_req` rơi đúng cạnh response, lookup bị hủy, line khác NS cùng thread | Trong thiết kế tích hợp một thread không bao giờ bị invalidate khi đang fetch (assertion `FU_NO_INV_WHILE_FETCHING`); các trường hợp còn lại cần kill rơi đúng chu kỳ. Tất cả đều được `dma_fetch_unit_tb`/`dma_icache_tb` phủ (coverage unit riêng) |
 
 ---
 

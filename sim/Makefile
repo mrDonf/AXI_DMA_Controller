@@ -5,7 +5,7 @@
 #   make build                      model + compile + optimise both snapshots
 #   make sim TEST=dma_m2m_aligned_test CFG=async SEED=7
 #   make gui TEST=dma_fault_test    interactive run with waveforms
-#   make regress [JOBS=12] [SEEDS=3] parallel regression (python)
+#   make regress [JOBS=4] [SEEDS=3] parallel regression (python)
 #   make cov                        regression with merged coverage
 #   make clean
 #===============================================================================
@@ -18,9 +18,9 @@ UVM_DPI := $(UVM_LIB)/win64/uvm_dpi
 TEST    ?= dma_m2m_aligned_test
 CFG     ?= sync
 SEED    ?= 1
-JOBS    ?= $(shell python -c "import os; print(os.cpu_count() or 1)")
+JOBS    ?= 4
 SEEDS   ?= 1
-VOPT_J  ?= 8
+VOPT_J  ?= 4
 VERB    ?= UVM_LOW
 MODEL_CC ?= gcc
 MODEL   := ../model

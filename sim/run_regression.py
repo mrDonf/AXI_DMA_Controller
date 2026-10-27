@@ -12,7 +12,7 @@ Speed-ups used:
 Examples:
   python run_regression.py                        # all tests, both configs, 1 seed
   python run_regression.py -t dma_fault_test -c async --seeds 3
-  python run_regression.py --cov -j 12            # with code + functional coverage
+  python run_regression.py --cov -j 4             # with code + functional coverage
   python run_regression.py --no-build -t dma_reg_test
 """
 import argparse
@@ -197,9 +197,10 @@ def main():
     ap.add_argument("-c", "--configs", nargs="+", default=list(CONFIGS), choices=list(CONFIGS))
     ap.add_argument("--seeds", type=int, default=1, help="seeds per test/config")
     ap.add_argument("--seed-base", type=int, default=1)
-    ap.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 1,
-                    help="parallel simulations (default: logical CPU count)")
-    ap.add_argument("--vopt-j", type=int, default=8, help="vopt parallel code generation")
+    # At most 4 simulations / 4 vopt threads by default (project rule)
+    ap.add_argument("-j", "--jobs", type=int, default=min(4, os.cpu_count() or 1),
+                    help="parallel simulations (default: 4)")
+    ap.add_argument("--vopt-j", type=int, default=4, help="vopt parallel code generation (default: 4)")
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--skip-unit", action="store_true", help="skip directed RTL unit tests after build")
     ap.add_argument("--no-cmodel", action="store_true",
@@ -221,7 +222,7 @@ def main():
         build(args)
         if not args.skip_unit:
             import run_unit_tests
-            run_unit_tests.main([])
+            run_unit_tests.main(["--cov"] if args.cov else [])
     if not args.cmodel:
         skipped = [t for t in args.tests if t in CMODEL_TESTS]
         if skipped:

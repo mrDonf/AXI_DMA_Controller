@@ -32,7 +32,10 @@ def main(argv=None):
     parser.add_argument("--rtl-root", type=Path, default=ROOT / "rtl")
     parser.add_argument("--top", choices=["dma_icache_tb", "dma_fetch_unit_tb", "dma_wr_engine_tb"])
     parser.add_argument("--library", default="unit_work")
-    parser.add_argument("--mutations", action="store_true", help="also confirm that five planted bugs fail")
+    parser.add_argument("--mutations", action="store_true", help="also confirm that the planted bugs fail")
+    parser.add_argument("--cov", action="store_true",
+                        help="code coverage of the RTL under test, merged into sim/cov/unit/merged.ucdb "
+                             "(kept apart from the UVM UCDB: other parameter values make other code)")
     args = parser.parse_args(argv)
     lib = args.library
     logs = HERE / "logs" / "unit"
@@ -44,9 +47,15 @@ def main(argv=None):
     rtl = ["core/dma330_pkg.sv", "common/dma_sync_fifo.sv", "common/dma_rr_arbiter.sv",
            "core/dma_icache.sv", "core/dma_fetch_unit.sv", "core/dma_wr_engine.sv"]
     tops = ["dma_icache_tb", "dma_fetch_unit_tb", "dma_wr_engine_tb"]
+    # Same coverage options as the UVM build (run_regression.py), RTL only
+    rtl_cov = ["+cover=bcesf", "-coverexcludedefault", "-nofsmresettrans"] if args.cov else []
+    run("vlog", "-sv", "-svinputport=var", "-quiet", "-work", lib, *rtl_cov,
+        *[args.rtl_root / f for f in rtl], log=logs / "build.log")
     run("vlog", "-sv", "-svinputport=var", "-quiet", "-work", lib,
-        *[args.rtl_root / f for f in rtl],
-        *[ROOT / "tb" / "unit" / f"{top}.sv" for top in tops], log=logs / "build.log")
+        *[ROOT / "tb" / "unit" / f"{top}.sv" for top in tops], log=logs / "build_tb.log")
+    cov_dir = HERE / "cov" / "unit"
+    if args.cov:
+        cov_dir.mkdir(parents=True, exist_ok=True)
     cases = [("dma_icache_tb", {"DATA_W": w, "BEATS": b})
              for w, b in [(32, 2), (64, 1), (64, 4), (128, 4)]]
     cases += [("dma_fetch_unit_tb", {"LINE_BYTES": b}) for b in (8, 32)]
@@ -57,12 +66,23 @@ def main(argv=None):
         name = top + "_" + "_".join(f"{k}{v}" for k, v in params.items())
         run("vopt", f"{lib}.{top}", "-work", lib, "-o", name,
             *[f"-G{k}={v}" for k, v in params.items()], log=logs / f"{name}_opt.log")
-        out = run("vsim", "-c", f"{lib}.{name}", "-do", "run -all; quit -f",
+        do = "run -all; quit -f"
+        if args.cov:
+            ucdb = (cov_dir / f"{name}.ucdb").as_posix()
+            do = f"coverage save -onexit -testname unit_{name} {ucdb}; " + do
+        out = run("vsim", "-c", *(["-coverage"] if args.cov else []), f"{lib}.{name}", "-do", do,
                   log=logs / f"{name}.log")
         if "UNIT TEST PASSED:" not in out:
             sys.exit(f"FAIL (no result): {name}")
         print(f"PASS {name}", flush=True)
     print(f"All {len(cases)} directed RTL cases passed.")
+    if args.cov:
+        ucdbs = sorted(str(p) for p in cov_dir.glob("*.ucdb") if p.name != "merged.ucdb")
+        run("vcover", "merge", cov_dir / "merged.ucdb", *ucdbs, log=logs / "cov_merge.log")
+        run("vcover", "report", "-totals", cov_dir / "merged.ucdb", log=HERE / "logs" / "cov_unit_summary.txt")
+        run("vcover", "report", "-details", "-code", "bcesf", "-zeros", cov_dir / "merged.ucdb",
+            log=HERE / "logs" / "cov_unit_zeros.txt")
+        print("[cov] unit-test coverage: logs/cov_unit_summary.txt, logs/cov_unit_zeros.txt", flush=True)
     if args.mutations:
         check_mutations(rtl, logs)
 
@@ -77,10 +97,16 @@ def check_mutations(rtl, logs):
         ("fetch_on_invalidate", "core/dma_fetch_unit.sv", "dma_fetch_unit_tb", "cancelled fetch delivered", [
             ("&& !fetch_err && !inv)", "&& !fetch_err)"),
             ("        insn_valid <= 1'b0;\n        fetch_err  <= 1'b0;", "")]),
+        ("next_line_retry", "core/dma_fetch_unit.sv", "dma_fetch_unit_tb", "cancelled fetch delivered", [
+            # second-line (F_NEXT) response: the one followed by "insn <="
+            ("if (fetch_req && !aborted && !inv && !ic_resp_retry) begin\n              if (ic_resp_err) begin\n"
+             "                fetch_err <= 1'b1;\n              end else begin\n                insn ",
+             "if (fetch_req && !aborted && !inv) begin\n              if (ic_resp_err) begin\n"
+             "                fetch_err <= 1'b1;\n              end else begin\n                insn ")]),
         ("write_bubble", "core/dma_wr_engine.sv", "dma_wr_engine_tb", "avoidable W bubble", [
             ("assign start     = (!act_valid || finish) && sel_valid;", "assign start     = !act_valid && sel_valid;")]),
         ("write_overclaim", "core/dma_wr_engine.sv", "dma_wr_engine_tb", "MFIFO underflow", [
-            ("(int'(mf_count[ch]) - (mf_pop[ch] ? int'(mf_pop_n) : 0))", "int'(mf_count[ch])")]),
+            ("(int'(mf_count[ch]) - (last_pop[ch] ? int'(mf_pop_n) : 0))", "int'(mf_count[ch])")]),
     ]
     for name, target, top, diagnostic, patches in mutants:
         dest = logs / "mutations" / name

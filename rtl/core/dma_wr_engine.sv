@@ -179,13 +179,19 @@ module dma_wr_engine
   logic              finish;
   logic              aw_fire, w_fire;
 
+  // A replacement can start on the edge the current burst completes, i.e. while
+  // its last W beat is on the bus. Those bytes (a whole group for a wide
+  // endian swap) are no longer available to the replacement. The amount is
+  // known from the burst state alone, so selection does not depend on
+  // WREADY/AWREADY: if the last beat is not accepted, 'finish' (and so
+  // 'start') is low anyway. Only 'start' itself sees the AXI ready inputs.
+  logic [NUM_CH-1:0] last_pop;
+
   for (genvar ch = 0; ch < NUM_CH; ch++) begin : g_cand
+    assign last_pop[ch] = wr_active[ch] && w_pend && m_wlast && !act_x.zero;
     assign cand[ch] = !wq_empty[ch] && !btrk_full[ch] && !ch_flush[ch] &&
                       (wq_iss[ch].zero ||
-                       // A replacement can start on the last beat of the
-                       // current burst. Those bytes are no longer available
-                       // to the replacement, including a wide swap-group pop.
-                       (int'(mf_count[ch]) - (mf_pop[ch] ? int'(mf_pop_n) : 0)) >=
+                       (int'(mf_count[ch]) - (last_pop[ch] ? int'(mf_pop_n) : 0)) >=
                          int'(wq_iss[ch].bytes));
   end
 

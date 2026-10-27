@@ -201,6 +201,23 @@ module sva_channel
   CH_C_LD_ST:          cover  property (ld_valid ##[1:20] st_valid);
 endmodule
 
+// Fetch unit in the integrated design: a thread is never invalidated while it
+// fetches (its maintenance comes from DMAWFE/DMAEND/DMAKILL in EXEC, from a
+// DMAGO while Stopped, or from Completing/Killing). The fetch unit's own
+// inv-during-fetch handling is therefore defensive here and is exercised by
+// the directed unit test (tb/unit/dma_fetch_unit_tb.sv).
+//------------------------------------------------------------------------------
+module sva_fetch_unit (
+  input logic clk,
+  input logic rst_n,
+  input logic fetch_req,
+  input logic inv
+);
+  default clocking cb @(posedge clk); endclocking
+  default disable iff (!rst_n);
+  FU_NO_INV_WHILE_FETCHING: assert property (!(fetch_req && inv));
+endmodule
+
 // Manager DMAEND/DMAKILL have no data transactions to drain. The faulted
 // manager's debug DMAKILL takes a separate path from normal execution.
 module sva_manager_cache
