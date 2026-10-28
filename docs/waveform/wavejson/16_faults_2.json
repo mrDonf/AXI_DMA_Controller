@@ -1,0 +1,2043 @@
+{
+  "signal": [
+    {
+      "name": "sample clock",
+      "wave": "p..............................."
+    },
+    {
+      "name": "source cycle",
+      "wave": "================================",
+      "data": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "26",
+        "27",
+        "28",
+        "29",
+        "30",
+        "31"
+      ]
+    },
+    [
+      "Thread",
+      {
+        "name": "ch3.state (internal)",
+        "wave": "75.75.75.75.74.....9............",
+        "data": [
+          "EX",
+          "FET",
+          "EX",
+          "FET",
+          "EX",
+          "FET",
+          "EX",
+          "FET",
+          "EX",
+          "BAR",
+          "FC"
+        ]
+      },
+      {
+        "name": "ch3.PC",
+        "wave": "55..5..5..5.....................",
+        "data": [
+          "A1",
+          "0004400c",
+          "00044012",
+          "00044013",
+          "00044014"
+        ]
+      },
+      {
+        "name": "opcode (when EXEC)",
+        "wave": "2x.2x.5x.7x.4x..................",
+        "data": [
+          "MOV",
+          "MOV",
+          "LD",
+          "ST",
+          "WMB"
+        ]
+      },
+      {
+        "name": "ftr",
+        "wave": "2..................9............",
+        "data": [
+          "00000000",
+          "00040000"
+        ]
+      },
+      {
+        "name": "far",
+        "wave": "5..................5............",
+        "data": [
+          "00000000",
+          "e0000000"
+        ]
+      },
+      {
+        "name": "rd_err",
+        "wave": "0.................1.01.......01."
+      },
+      {
+        "name": "dp_flush",
+        "wave": "0..................1............"
+      }
+    ],
+    {
+      "name": "irq_abort",
+      "wave": "0..................1............"
+    },
+    [
+      "AXI read",
+      {
+        "name": "AR.valid",
+        "wave": "0.......10......................"
+      },
+      {
+        "name": "AR.ready",
+        "wave": "0.101.01...01......0..10101.0101"
+      },
+      {
+        "name": "AR.addr",
+        "wave": "x.......5x......................",
+        "data": [
+          "A2"
+        ]
+      },
+      {
+        "name": "rvalid (RDY=1)",
+        "wave": "1.....01...0......1.01.......01."
+      },
+      {
+        "name": "rid",
+        "wave": "2.....x2...x......2.x2.......x2.",
+        "data": [
+          "0",
+          "0",
+          "3",
+          "3",
+          "3"
+        ]
+      },
+      {
+        "name": "rdata",
+        "wave": "56...7x7..8x......43x56784356x78",
+        "data": [
+          "D1",
+          "5c5d5e5f58595a5b",
+          "D2",
+          "4445464740414243",
+          "D3",
+          "D4",
+          "D5",
+          "D6",
+          "D7",
+          "D8",
+          "D9",
+          "D10",
+          "D11",
+          "D12",
+          "D13",
+          "D14",
+          "D15"
+        ]
+      },
+      {
+        "name": "rlast",
+        "wave": "0.....x0..1x......0.x0.......x0."
+      },
+      {
+        "name": "rresp",
+        "wave": "2.....x2...x......2.x2.......x2.",
+        "data": [
+          "0",
+          "0",
+          "2",
+          "2",
+          "2"
+        ]
+      }
+    ],
+    [
+      "AXI write",
+      {
+        "name": "AW.valid",
+        "wave": "0..10...10.....1..0........10..."
+      },
+      {
+        "name": "AW.ready",
+        "wave": "0.1............0.1..0101..01...."
+      },
+      {
+        "name": "AW.addr",
+        "wave": "x..5x...5x.....5..x........5x...",
+        "data": [
+          "A3",
+          "A4",
+          "200cbb66",
+          "A5"
+        ]
+      },
+      {
+        "name": "wvalid",
+        "wave": "1..............................."
+      },
+      {
+        "name": "wready",
+        "wave": "1..........01010.10.10.101.01.01"
+      },
+      {
+        "name": "wdata",
+        "wave": "435678435678.4.3..5..6..7.84.35.",
+        "data": [
+          "D16",
+          "D17",
+          "D18",
+          "D19",
+          "D20",
+          "D21",
+          "D22",
+          "D23",
+          "D24",
+          "D25",
+          "D26",
+          "D27",
+          "D28",
+          "006b000000000000",
+          "6a00000000000000",
+          "0000000000000069",
+          "D29",
+          "D30",
+          "D31",
+          "D32",
+          "D33"
+        ]
+      },
+      {
+        "name": "wstrb",
+        "wave": "222222222222.2.2..2..2..2.22.22.",
+        "data": [
+          "02",
+          "04",
+          "08",
+          "10",
+          "20",
+          "40",
+          "80",
+          "01",
+          "02",
+          "04",
+          "08",
+          "10",
+          "20",
+          "40",
+          "80",
+          "01",
+          "02",
+          "04",
+          "08",
+          "10",
+          "20"
+        ]
+      },
+      {
+        "name": "wlast",
+        "wave": "0.10...10....1.0..........10...."
+      },
+      {
+        "name": "bvalid (RDY=1)",
+        "wave": "0.10....10..10....10............"
+      }
+    ]
+  ],
+  "head": {
+    "text": "Diagnose a precise program fault and an imprecise bus fault - 2"
+  },
+  "foot": {
+    "text": "1 cell = 5 ns; first RIGHT edge = 3547.5 ns; | = omitted idle cycles"
+  },
+  "config": {
+    "hscale": 1,
+    "skin": "default"
+  },
+  "_meta": {
+    "source_vcd": "trace.vcd",
+    "description": "Use FTR, CPC and FAR for the right purpose instead of treating every abort PC as precise.",
+    "sampling": "pre-edge at RIGHT cell boundary",
+    "exclude_instruction_fetch": true,
+    "clock_source": "dma_wave_top.tb.aclk",
+    "cycle_ns": 5.0,
+    "first_right_edge_ns": 3547.5,
+    "last_right_edge_ns": 3702.5,
+    "right_edge_ns": [
+      3547.5,
+      3552.5,
+      3557.5,
+      3562.5,
+      3567.5,
+      3572.5,
+      3577.5,
+      3582.5,
+      3587.5,
+      3592.5,
+      3597.5,
+      3602.5,
+      3607.5,
+      3612.5,
+      3617.5,
+      3622.5,
+      3627.5,
+      3632.5,
+      3637.5,
+      3642.5,
+      3647.5,
+      3652.5,
+      3657.5,
+      3662.5,
+      3667.5,
+      3672.5,
+      3677.5,
+      3682.5,
+      3687.5,
+      3692.5,
+      3697.5,
+      3702.5
+    ],
+    "idle_gaps": [],
+    "omitted_signals": [
+      {
+        "name": "reset_n",
+        "path": "dma_wave_top.tb.rst_n",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "wr_err",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[3].u_channel.wr_err",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "ftrd",
+        "path": "dma_wave_top.tb.u_dut.u_core.ftrd",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "mgr_faulting",
+        "path": "dma_wave_top.tb.u_dut.u_core.mgr_faulting",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "AR.len",
+        "path": "dma_wave_top.tb.axi.arlen",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "AW.len",
+        "path": "dma_wave_top.tb.axi.awlen",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "rready",
+        "path": "dma_wave_top.tb.axi.rready",
+        "reason": "READY always 1; noted on VALID row"
+      },
+      {
+        "name": "bready",
+        "path": "dma_wave_top.tb.axi.bready",
+        "reason": "READY always 1; noted on VALID row"
+      },
+      {
+        "name": "bresp",
+        "path": "dma_wave_top.tb.axi.bresp",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "irq bitmap",
+        "path": "dma_wave_top.tb.ctrl.irq",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "debug KILL",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[3].u_channel.dbg_kill",
+        "reason": "constant; moved to context table"
+      }
+    ],
+    "constant_context": [
+      {
+        "name": "reset_n",
+        "path": "dma_wave_top.tb.rst_n",
+        "value": "1"
+      },
+      {
+        "name": "wr_err",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[3].u_channel.wr_err",
+        "value": "0"
+      },
+      {
+        "name": "ftrd",
+        "path": "dma_wave_top.tb.u_dut.u_core.ftrd",
+        "value": "00000000"
+      },
+      {
+        "name": "mgr_faulting",
+        "path": "dma_wave_top.tb.u_dut.u_core.mgr_faulting",
+        "value": "0"
+      },
+      {
+        "name": "AR.len",
+        "path": "dma_wave_top.tb.axi.arlen",
+        "value": "0f"
+      },
+      {
+        "name": "AW.len",
+        "path": "dma_wave_top.tb.axi.awlen",
+        "value": "04"
+      },
+      {
+        "name": "rready",
+        "path": "dma_wave_top.tb.axi.rready",
+        "value": "1 (no back-pressure)"
+      },
+      {
+        "name": "bready",
+        "path": "dma_wave_top.tb.axi.bready",
+        "value": "1 (no back-pressure)"
+      },
+      {
+        "name": "bresp",
+        "path": "dma_wave_top.tb.axi.bresp",
+        "value": "0"
+      },
+      {
+        "name": "irq bitmap",
+        "path": "dma_wave_top.tb.ctrl.irq",
+        "value": "0000"
+      },
+      {
+        "name": "debug KILL",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[3].u_channel.dbg_kill",
+        "value": "0"
+      }
+    ],
+    "value_labels": {
+      "A1": {
+        "signals": [
+          "ch3.PC"
+        ],
+        "value": "00044006",
+        "sources": [
+          "dma_wave_top.tb.u_dut.u_core.g_ch[3].u_channel.pc"
+        ]
+      },
+      "A2": {
+        "signals": [
+          "AR.addr"
+        ],
+        "value": "e0000000",
+        "sources": [
+          "dma_wave_top.tb.axi.araddr"
+        ]
+      },
+      "A3": {
+        "signals": [
+          "AW.addr"
+        ],
+        "value": "200cbb5c",
+        "sources": [
+          "dma_wave_top.tb.axi.awaddr"
+        ]
+      },
+      "A4": {
+        "signals": [
+          "AW.addr"
+        ],
+        "value": "200cbb61",
+        "sources": [
+          "dma_wave_top.tb.axi.awaddr"
+        ]
+      },
+      "A5": {
+        "signals": [
+          "AW.addr"
+        ],
+        "value": "200cbb6b",
+        "sources": [
+          "dma_wave_top.tb.axi.awaddr"
+        ]
+      },
+      "D1": {
+        "signals": [
+          "rdata"
+        ],
+        "value": "5455565750515253",
+        "sources": [
+          "dma_wave_top.tb.axi.rdata"
+        ]
+      },
+      "D2": {
+        "signals": [
+          "rdata"
+        ],
+        "value": "4445464740414243",
+        "sources": [
+          "dma_wave_top.tb.axi.rdata"
+        ]
+      },
+      "D3": {
+        "signals": [
+          "rdata"
+        ],
+        "value": "4c4d4e4f48494a4b",
+        "sources": [
+          "dma_wave_top.tb.axi.rdata"
+        ]
+      },
+      "D4": {
+        "signals": [
+          "rdata"
+        ],
+        "value": "bdbcbfbeb9b8bbba",
+        "sources": [
+          "dma_wave_top.tb.axi.rdata"
+        ]
+      },
+      "D5": {
+        "signals": [
+          "rdata"
+        ],
+        "value": "b5b4b7b6b1b0b3b2",
+        "sources": [
+          "dma_wave_top.tb.axi.rdata"
+        ]
+      },
+      "D6": {
+        "signals": [
+          "rdata"
+        ],
+        "value": "adacafaea9a8abaa",
+        "sources": [
+          "dma_wave_top.tb.axi.rdata"
+        ]
+      },
+      "D7": {
+        "signals": [
+          "rdata"
+        ],
+        "value": "a5a4a7a6a1a0a3a2",
+        "sources": [
+          "dma_wave_top.tb.axi.rdata"
+        ]
+      },
+      "D8": {
+        "signals": [
+          "rdata"
+        ],
+        "value": "9d9c9f9e99989b9a",
+        "sources": [
+          "dma_wave_top.tb.axi.rdata"
+        ]
+      },
+      "D9": {
+        "signals": [
+          "rdata"
+        ],
+        "value": "9594979691909392",
+        "sources": [
+          "dma_wave_top.tb.axi.rdata"
+        ]
+      },
+      "D10": {
+        "signals": [
+          "rdata"
+        ],
+        "value": "8d8c8f8e89888b8a",
+        "sources": [
+          "dma_wave_top.tb.axi.rdata"
+        ]
+      },
+      "D11": {
+        "signals": [
+          "rdata"
+        ],
+        "value": "8584878681808382",
+        "sources": [
+          "dma_wave_top.tb.axi.rdata"
+        ]
+      },
+      "D12": {
+        "signals": [
+          "rdata"
+        ],
+        "value": "fdfcfffef9f8fbfa",
+        "sources": [
+          "dma_wave_top.tb.axi.rdata"
+        ]
+      },
+      "D13": {
+        "signals": [
+          "rdata"
+        ],
+        "value": "f5f4f7f6f1f0f3f2",
+        "sources": [
+          "dma_wave_top.tb.axi.rdata"
+        ]
+      },
+      "D14": {
+        "signals": [
+          "rdata"
+        ],
+        "value": "edecefeee9e8ebea",
+        "sources": [
+          "dma_wave_top.tb.axi.rdata"
+        ]
+      },
+      "D15": {
+        "signals": [
+          "rdata"
+        ],
+        "value": "e5e4e7e6e1e0e3e2",
+        "sources": [
+          "dma_wave_top.tb.axi.rdata"
+        ]
+      },
+      "D16": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "0000000000007800",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D17": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "00000000007f0000",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D18": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "000000007e000000",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D19": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "0000007d00000000",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D20": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "00007c0000000000",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D21": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "0063000000000000",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D22": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "6200000000000000",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D23": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "0000000000000061",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D24": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "0000000000006000",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D25": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "0000000000670000",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D26": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "0000000066000000",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D27": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "0000006500000000",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D28": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "0000640000000000",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D29": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "0000000000006800",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D30": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "00000000006f0000",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D31": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "000000006e000000",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D32": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "0000006d00000000",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D33": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "00006c0000000000",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      }
+    },
+    "lanes": [
+      {
+        "name": "ch3.state (internal)",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[3].u_channel.state",
+        "width": 4,
+        "samples": [
+          "10",
+          "1",
+          "1",
+          "10",
+          "1",
+          "1",
+          "10",
+          "1",
+          "1",
+          "10",
+          "1",
+          "1",
+          "10",
+          "101",
+          "101",
+          "101",
+          "101",
+          "101",
+          "101",
+          "1000",
+          "1000",
+          "1000",
+          "1000",
+          "1000",
+          "1000",
+          "1000",
+          "1000",
+          "1000",
+          "1000",
+          "1000",
+          "1000",
+          "1000"
+        ],
+        "gate": null
+      },
+      {
+        "name": "ch3.PC",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[3].u_channel.pc",
+        "width": 32,
+        "samples": [
+          "1000100000000000110",
+          "1000100000000001100",
+          "1000100000000001100",
+          "1000100000000001100",
+          "1000100000000010010",
+          "1000100000000010010",
+          "1000100000000010010",
+          "1000100000000010011",
+          "1000100000000010011",
+          "1000100000000010011",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100",
+          "1000100000000010100"
+        ],
+        "gate": null
+      },
+      {
+        "name": "opcode (when EXEC)",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[3].u_channel.op",
+        "width": 8,
+        "samples": [
+          "10111100",
+          null,
+          null,
+          "10111100",
+          null,
+          null,
+          "100",
+          null,
+          null,
+          "1000",
+          null,
+          null,
+          "10011",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "gate": "dma_wave_top.tb.u_dut.u_core.g_ch[3].u_channel.state"
+      },
+      {
+        "name": "ftr",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[3].u_channel.ftr",
+        "width": 32,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1000000000000000000",
+          "1000000000000000000",
+          "1000000000000000000",
+          "1000000000000000000",
+          "1000000000000000000",
+          "1000000000000000000",
+          "1000000000000000000",
+          "1000000000000000000",
+          "1000000000000000000",
+          "1000000000000000000",
+          "1000000000000000000",
+          "1000000000000000000",
+          "1000000000000000000"
+        ],
+        "gate": null
+      },
+      {
+        "name": "far",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[3].u_channel.far",
+        "width": 32,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "11100000000000000000000000000000",
+          "11100000000000000000000000000000",
+          "11100000000000000000000000000000",
+          "11100000000000000000000000000000",
+          "11100000000000000000000000000000",
+          "11100000000000000000000000000000",
+          "11100000000000000000000000000000",
+          "11100000000000000000000000000000",
+          "11100000000000000000000000000000",
+          "11100000000000000000000000000000",
+          "11100000000000000000000000000000",
+          "11100000000000000000000000000000",
+          "11100000000000000000000000000000"
+        ],
+        "gate": null
+      },
+      {
+        "name": "rd_err",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[3].u_channel.rd_err",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
+          "0",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "0",
+          "1",
+          "1"
+        ],
+        "gate": null
+      },
+      {
+        "name": "dp_flush",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[3].u_channel.dp_flush",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1"
+        ],
+        "gate": null
+      },
+      {
+        "name": "irq_abort",
+        "path": "dma_wave_top.tb.ctrl.irq_abort",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1"
+        ],
+        "gate": null
+      },
+      {
+        "name": "AR.valid",
+        "path": "dma_wave_top.tb.axi.arvalid",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "gate": null
+      },
+      {
+        "name": "AR.ready",
+        "path": "dma_wave_top.tb.axi.arready",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "1",
+          "0",
+          "1",
+          "1",
+          "0",
+          "1",
+          "1",
+          "1",
+          "1",
+          "0",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "0",
+          "0",
+          "0",
+          "1",
+          "0",
+          "1",
+          "0",
+          "1",
+          "1",
+          "0",
+          "1",
+          "0",
+          "1"
+        ],
+        "gate": null
+      },
+      {
+        "name": "AR.addr",
+        "path": "dma_wave_top.tb.axi.araddr",
+        "width": 32,
+        "samples": [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          "11100000000000000000000000000000",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "gate": "dma_wave_top.tb.axi.arvalid"
+      },
+      {
+        "name": "AW.valid",
+        "path": "dma_wave_top.tb.axi.awvalid",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "gate": null
+      },
+      {
+        "name": "AW.ready",
+        "path": "dma_wave_top.tb.axi.awready",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "0",
+          "0",
+          "1",
+          "1",
+          "1",
+          "0",
+          "1",
+          "0",
+          "1",
+          "1",
+          "1",
+          "0",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1"
+        ],
+        "gate": null
+      },
+      {
+        "name": "AW.addr",
+        "path": "dma_wave_top.tb.axi.awaddr",
+        "width": 32,
+        "samples": [
+          null,
+          null,
+          null,
+          "100000000011001011101101011100",
+          null,
+          null,
+          null,
+          null,
+          "100000000011001011101101100001",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          "100000000011001011101101100110",
+          "100000000011001011101101100110",
+          "100000000011001011101101100110",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          "100000000011001011101101101011",
+          null,
+          null,
+          null,
+          null
+        ],
+        "gate": "dma_wave_top.tb.axi.awvalid"
+      },
+      {
+        "name": "rvalid (RDY=1)",
+        "path": "dma_wave_top.tb.axi.rvalid",
+        "width": 1,
+        "samples": [
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "0",
+          "1",
+          "1",
+          "1",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
+          "0",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "0",
+          "1",
+          "1"
+        ],
+        "gate": null
+      },
+      {
+        "name": "rid",
+        "path": "dma_wave_top.tb.axi.rid",
+        "width": 4,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          null,
+          "0",
+          "0",
+          "0",
+          "0",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          "11",
+          "11",
+          null,
+          "11",
+          "11",
+          "11",
+          "11",
+          "11",
+          "11",
+          "11",
+          "11",
+          null,
+          "11",
+          "11"
+        ],
+        "gate": "dma_wave_top.tb.axi.rvalid"
+      },
+      {
+        "name": "rdata",
+        "path": "dma_wave_top.tb.axi.rdata",
+        "width": 64,
+        "samples": [
+          "101010001010101010101100101011101010000010100010101001001010011",
+          "101110001011101010111100101111101011000010110010101101001011011",
+          "101110001011101010111100101111101011000010110010101101001011011",
+          "101110001011101010111100101111101011000010110010101101001011011",
+          "101110001011101010111100101111101011000010110010101101001011011",
+          "100010001000101010001100100011101000000010000010100001001000011",
+          null,
+          "100010001000101010001100100011101000000010000010100001001000011",
+          "100010001000101010001100100011101000000010000010100001001000011",
+          "100010001000101010001100100011101000000010000010100001001000011",
+          "100110001001101010011100100111101001000010010010100101001001011",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          "1011110110111100101111111011111010111001101110001011101110111010",
+          "1011010110110100101101111011011010110001101100001011001110110010",
+          null,
+          "1010110110101100101011111010111010101001101010001010101110101010",
+          "1010010110100100101001111010011010100001101000001010001110100010",
+          "1001110110011100100111111001111010011001100110001001101110011010",
+          "1001010110010100100101111001011010010001100100001001001110010010",
+          "1000110110001100100011111000111010001001100010001000101110001010",
+          "1000010110000100100001111000011010000001100000001000001110000010",
+          "1111110111111100111111111111111011111001111110001111101111111010",
+          "1111010111110100111101111111011011110001111100001111001111110010",
+          null,
+          "1110110111101100111011111110111011101001111010001110101111101010",
+          "1110010111100100111001111110011011100001111000001110001111100010"
+        ],
+        "gate": "dma_wave_top.tb.axi.rvalid"
+      },
+      {
+        "name": "rlast",
+        "path": "dma_wave_top.tb.axi.rlast",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          null,
+          "0",
+          "0",
+          "0",
+          "1",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          "0",
+          "0",
+          null,
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          null,
+          "0",
+          "0"
+        ],
+        "gate": "dma_wave_top.tb.axi.rvalid"
+      },
+      {
+        "name": "rresp",
+        "path": "dma_wave_top.tb.axi.rresp",
+        "width": 2,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          null,
+          "0",
+          "0",
+          "0",
+          "0",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          "10",
+          "10",
+          null,
+          "10",
+          "10",
+          "10",
+          "10",
+          "10",
+          "10",
+          "10",
+          "10",
+          null,
+          "10",
+          "10"
+        ],
+        "gate": "dma_wave_top.tb.axi.rvalid"
+      },
+      {
+        "name": "wvalid",
+        "path": "dma_wave_top.tb.axi.wvalid",
+        "width": 1,
+        "samples": [
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1"
+        ],
+        "gate": null
+      },
+      {
+        "name": "wready",
+        "path": "dma_wave_top.tb.axi.wready",
+        "width": 1,
+        "samples": [
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "0",
+          "1",
+          "0",
+          "1",
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "1",
+          "0",
+          "1",
+          "1",
+          "0",
+          "1",
+          "1",
+          "0",
+          "1"
+        ],
+        "gate": null
+      },
+      {
+        "name": "wdata",
+        "path": "dma_wave_top.tb.axi.wdata",
+        "width": 64,
+        "samples": [
+          "111100000000000",
+          "11111110000000000000000",
+          "1111110000000000000000000000000",
+          "111110100000000000000000000000000000000",
+          "11111000000000000000000000000000000000000000000",
+          "1100011000000000000000000000000000000000000000000000000",
+          "110001000000000000000000000000000000000000000000000000000000000",
+          "1100001",
+          "110000000000000",
+          "11001110000000000000000",
+          "1100110000000000000000000000000",
+          "110010100000000000000000000000000000000",
+          "110010100000000000000000000000000000000",
+          "11001000000000000000000000000000000000000000000",
+          "11001000000000000000000000000000000000000000000",
+          "1101011000000000000000000000000000000000000000000000000",
+          "1101011000000000000000000000000000000000000000000000000",
+          "1101011000000000000000000000000000000000000000000000000",
+          "110101000000000000000000000000000000000000000000000000000000000",
+          "110101000000000000000000000000000000000000000000000000000000000",
+          "110101000000000000000000000000000000000000000000000000000000000",
+          "1101001",
+          "1101001",
+          "1101001",
+          "110100000000000",
+          "110100000000000",
+          "11011110000000000000000",
+          "1101110000000000000000000000000",
+          "1101110000000000000000000000000",
+          "110110100000000000000000000000000000000",
+          "11011000000000000000000000000000000000000000000",
+          "11011000000000000000000000000000000000000000000"
+        ],
+        "gate": "dma_wave_top.tb.axi.wvalid"
+      },
+      {
+        "name": "wstrb",
+        "path": "dma_wave_top.tb.axi.wstrb",
+        "width": 8,
+        "samples": [
+          "10",
+          "100",
+          "1000",
+          "10000",
+          "100000",
+          "1000000",
+          "10000000",
+          "1",
+          "10",
+          "100",
+          "1000",
+          "10000",
+          "10000",
+          "100000",
+          "100000",
+          "1000000",
+          "1000000",
+          "1000000",
+          "10000000",
+          "10000000",
+          "10000000",
+          "1",
+          "1",
+          "1",
+          "10",
+          "10",
+          "100",
+          "1000",
+          "1000",
+          "10000",
+          "100000",
+          "100000"
+        ],
+        "gate": "dma_wave_top.tb.axi.wvalid"
+      },
+      {
+        "name": "wlast",
+        "path": "dma_wave_top.tb.axi.wlast",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "gate": "dma_wave_top.tb.axi.wvalid"
+      },
+      {
+        "name": "bvalid (RDY=1)",
+        "path": "dma_wave_top.tb.axi.bvalid",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0"
+        ],
+        "gate": null
+      }
+    ],
+    "note": "Asynchronous pins are cycle snapshots; exact acceptance times are in the operation table and original VCD.",
+    "colors": {
+      "skin": "default",
+      "palette": {
+        "2": {
+          "name": "white",
+          "hex": "#ffffff"
+        },
+        "3": {
+          "name": "pale amber",
+          "hex": "#ffffb4"
+        },
+        "4": {
+          "name": "soft peach",
+          "hex": "#ffe0b9"
+        },
+        "5": {
+          "name": "pastel blue",
+          "hex": "#b9e0ff"
+        },
+        "6": {
+          "name": "pale cyan",
+          "hex": "#ccfdfe"
+        },
+        "7": {
+          "name": "soft green",
+          "hex": "#cdfdc5"
+        },
+        "8": {
+          "name": "light lavender",
+          "hex": "#f0c1fb"
+        },
+        "9": {
+          "name": "soft rose",
+          "hex": "#f5c2c0"
+        }
+      },
+      "state_symbols": {
+        "0": "2",
+        "1": "5",
+        "2": "7",
+        "3": "3",
+        "4": "3",
+        "5": "4",
+        "6": "6",
+        "7": "8",
+        "8": "9",
+        "9": "9"
+      },
+      "data_symbols": [
+        {
+          "width": 64,
+          "value": "5455565750515253",
+          "symbol": "5"
+        },
+        {
+          "width": 64,
+          "value": "5c5d5e5f58595a5b",
+          "symbol": "6"
+        },
+        {
+          "width": 64,
+          "value": "4445464740414243",
+          "symbol": "7"
+        },
+        {
+          "width": 64,
+          "value": "4c4d4e4f48494a4b",
+          "symbol": "8"
+        },
+        {
+          "width": 64,
+          "value": "bdbcbfbeb9b8bbba",
+          "symbol": "4"
+        },
+        {
+          "width": 64,
+          "value": "b5b4b7b6b1b0b3b2",
+          "symbol": "3"
+        },
+        {
+          "width": 64,
+          "value": "adacafaea9a8abaa",
+          "symbol": "5"
+        },
+        {
+          "width": 64,
+          "value": "a5a4a7a6a1a0a3a2",
+          "symbol": "6"
+        },
+        {
+          "width": 64,
+          "value": "9d9c9f9e99989b9a",
+          "symbol": "7"
+        },
+        {
+          "width": 64,
+          "value": "9594979691909392",
+          "symbol": "8"
+        },
+        {
+          "width": 64,
+          "value": "8d8c8f8e89888b8a",
+          "symbol": "4"
+        },
+        {
+          "width": 64,
+          "value": "8584878681808382",
+          "symbol": "3"
+        },
+        {
+          "width": 64,
+          "value": "fdfcfffef9f8fbfa",
+          "symbol": "5"
+        },
+        {
+          "width": 64,
+          "value": "f5f4f7f6f1f0f3f2",
+          "symbol": "6"
+        },
+        {
+          "width": 64,
+          "value": "edecefeee9e8ebea",
+          "symbol": "7"
+        },
+        {
+          "width": 64,
+          "value": "e5e4e7e6e1e0e3e2",
+          "symbol": "8"
+        },
+        {
+          "width": 64,
+          "value": "0000000000007800",
+          "symbol": "4"
+        },
+        {
+          "width": 64,
+          "value": "00000000007f0000",
+          "symbol": "3"
+        },
+        {
+          "width": 64,
+          "value": "000000007e000000",
+          "symbol": "5"
+        },
+        {
+          "width": 64,
+          "value": "0000007d00000000",
+          "symbol": "6"
+        },
+        {
+          "width": 64,
+          "value": "00007c0000000000",
+          "symbol": "7"
+        },
+        {
+          "width": 64,
+          "value": "0063000000000000",
+          "symbol": "8"
+        },
+        {
+          "width": 64,
+          "value": "6200000000000000",
+          "symbol": "4"
+        },
+        {
+          "width": 64,
+          "value": "0000000000000061",
+          "symbol": "3"
+        },
+        {
+          "width": 64,
+          "value": "0000000000006000",
+          "symbol": "5"
+        },
+        {
+          "width": 64,
+          "value": "0000000000670000",
+          "symbol": "6"
+        },
+        {
+          "width": 64,
+          "value": "0000000066000000",
+          "symbol": "7"
+        },
+        {
+          "width": 64,
+          "value": "0000006500000000",
+          "symbol": "8"
+        },
+        {
+          "width": 64,
+          "value": "0000640000000000",
+          "symbol": "4"
+        },
+        {
+          "width": 64,
+          "value": "006b000000000000",
+          "symbol": "3"
+        },
+        {
+          "width": 64,
+          "value": "6a00000000000000",
+          "symbol": "5"
+        },
+        {
+          "width": 64,
+          "value": "0000000000000069",
+          "symbol": "6"
+        },
+        {
+          "width": 64,
+          "value": "0000000000006800",
+          "symbol": "7"
+        },
+        {
+          "width": 64,
+          "value": "00000000006f0000",
+          "symbol": "8"
+        },
+        {
+          "width": 64,
+          "value": "000000006e000000",
+          "symbol": "4"
+        },
+        {
+          "width": 64,
+          "value": "0000006d00000000",
+          "symbol": "3"
+        },
+        {
+          "width": 64,
+          "value": "00006c0000000000",
+          "symbol": "5"
+        }
+      ],
+      "meaning": "State colors indicate state categories; data colors identify values within one figure. Labels remain authoritative; colors repeat after six distinct data values.",
+      "references": [
+        "https://wavedrom.com/tutorial.html",
+        "https://github.com/wavedrom/wavedrom/blob/trunk/skins/default.js"
+      ]
+    },
+    "source_run": "dma_fault_test_sync",
+    "operation": "16_faults",
+    "number": 2,
+    "source_window_ns": [
+      3547.5,
+      3707.5
+    ],
+    "source_vcd_sha256": "398728c1592322c5cdd9e3934b211933a3f222faa37615c99506aef99b5c781a"
+  }
+}

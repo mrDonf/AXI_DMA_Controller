@@ -1,0 +1,500 @@
+{
+  "signal": [
+    {
+      "name": "sample clock",
+      "wave": "p..........|p."
+    },
+    {
+      "name": "source cycle",
+      "wave": "===========|==",
+      "data": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "30",
+        "31"
+      ]
+    },
+    [
+      "Clock control",
+      {
+        "name": "qreqn",
+        "wave": "1.....0....|0."
+      },
+      {
+        "name": "qacceptn",
+        "wave": "1........0.|0."
+      },
+      {
+        "name": "qactive",
+        "wave": "0..1.0.....|0."
+      },
+      {
+        "name": "clk_en",
+        "wave": "1........0.|0."
+      }
+    ],
+    [
+      "APB control",
+      {
+        "name": "APB.psel",
+        "wave": "0..1.0.....|0."
+      },
+      {
+        "name": "APB.penable",
+        "wave": "0...10.....|0."
+      },
+      {
+        "name": "APB.pready",
+        "wave": "1........0.|0."
+      },
+      {
+        "name": "APB.pwrite",
+        "wave": "0..1.0.....|0."
+      }
+    ]
+  ],
+  "head": {
+    "text": "Accept sleep and wake the DMA for an APB access - 1"
+  },
+  "foot": {
+    "text": "1 cell = 5 ns; first RIGHT edge = 192.5 ns; | = omitted idle cycles"
+  },
+  "config": {
+    "hscale": 1,
+    "skin": "default"
+  },
+  "_meta": {
+    "source_vcd": "trace.vcd",
+    "description": "Separate quiescence acceptance, actual clock gating and later wake-up.",
+    "sampling": "pre-edge at RIGHT cell boundary",
+    "exclude_instruction_fetch": true,
+    "clock_source": "dma_wave_top.tb.aclk",
+    "cycle_ns": 5.0,
+    "first_right_edge_ns": 192.5,
+    "last_right_edge_ns": 347.5,
+    "right_edge_ns": [
+      192.5,
+      197.5,
+      202.5,
+      207.5,
+      212.5,
+      217.5,
+      222.5,
+      227.5,
+      232.5,
+      237.5,
+      242.5,
+      null,
+      342.5,
+      347.5
+    ],
+    "idle_gaps": [
+      {
+        "after_ns": 242.5,
+        "before_ns": 342.5,
+        "omitted_samples": 19
+      }
+    ],
+    "omitted_signals": [
+      {
+        "name": "pclk",
+        "path": "dma_wave_top.tb.pclk",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "dut_aclk",
+        "path": "dma_wave_top.tb.dut_aclk",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "rst_n",
+        "path": "dma_wave_top.tb.rst_n",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "qdeny",
+        "path": "dma_wave_top.tb.ctrl.qdeny",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "APB.paddr",
+        "path": "dma_wave_top.tb.apb.paddr",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "APB.pwdata",
+        "path": "dma_wave_top.tb.apb.pwdata",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "APB.prdata",
+        "path": "dma_wave_top.tb.apb.prdata",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "ch0.state (internal)",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.state",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "ch0.PC",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.pc",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "arvalid",
+        "path": "dma_wave_top.tb.axi.arvalid",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "arready",
+        "path": "dma_wave_top.tb.axi.arready",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "awvalid",
+        "path": "dma_wave_top.tb.axi.awvalid",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "awready",
+        "path": "dma_wave_top.tb.axi.awready",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "wvalid",
+        "path": "dma_wave_top.tb.axi.wvalid",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "wready",
+        "path": "dma_wave_top.tb.axi.wready",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "bvalid",
+        "path": "dma_wave_top.tb.axi.bvalid",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "rvalid",
+        "path": "dma_wave_top.tb.axi.rvalid",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "rlast",
+        "path": "dma_wave_top.tb.axi.rlast",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "irq bitmap",
+        "path": "dma_wave_top.tb.ctrl.irq",
+        "reason": "constant; moved to context table"
+      }
+    ],
+    "constant_context": [
+      {
+        "name": "pclk",
+        "path": "dma_wave_top.tb.pclk",
+        "value": "0"
+      },
+      {
+        "name": "dut_aclk",
+        "path": "dma_wave_top.tb.dut_aclk",
+        "value": "0"
+      },
+      {
+        "name": "rst_n",
+        "path": "dma_wave_top.tb.rst_n",
+        "value": "1"
+      },
+      {
+        "name": "qdeny",
+        "path": "dma_wave_top.tb.ctrl.qdeny",
+        "value": "0"
+      },
+      {
+        "name": "APB.paddr",
+        "path": "dma_wave_top.tb.apb.paddr",
+        "value": "00000020"
+      },
+      {
+        "name": "APB.pwdata",
+        "path": "dma_wave_top.tb.apb.pwdata",
+        "value": "0000000f"
+      },
+      {
+        "name": "APB.prdata",
+        "path": "dma_wave_top.tb.apb.prdata",
+        "value": "00000000"
+      },
+      {
+        "name": "ch0.state (internal)",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.state",
+        "value": "STOP"
+      },
+      {
+        "name": "ch0.PC",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.pc",
+        "value": "00000000"
+      },
+      {
+        "name": "irq bitmap",
+        "path": "dma_wave_top.tb.ctrl.irq",
+        "value": "0000"
+      }
+    ],
+    "value_labels": {},
+    "lanes": [
+      {
+        "name": "qreqn",
+        "path": "dma_wave_top.tb.ctrl.qreqn",
+        "width": 1,
+        "samples": [
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          null,
+          "0",
+          "0"
+        ],
+        "gate": null
+      },
+      {
+        "name": "qacceptn",
+        "path": "dma_wave_top.tb.ctrl.qacceptn",
+        "width": 1,
+        "samples": [
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "0",
+          "0",
+          null,
+          "0",
+          "0"
+        ],
+        "gate": null
+      },
+      {
+        "name": "qactive",
+        "path": "dma_wave_top.tb.ctrl.qactive",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          null,
+          "0",
+          "0"
+        ],
+        "gate": null
+      },
+      {
+        "name": "clk_en",
+        "path": "dma_wave_top.tb.ctrl.clk_en",
+        "width": 1,
+        "samples": [
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "0",
+          "0",
+          null,
+          "0",
+          "0"
+        ],
+        "gate": null
+      },
+      {
+        "name": "APB.psel",
+        "path": "dma_wave_top.tb.apb.psel",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          null,
+          "0",
+          "0"
+        ],
+        "gate": null
+      },
+      {
+        "name": "APB.penable",
+        "path": "dma_wave_top.tb.apb.penable",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          null,
+          "0",
+          "0"
+        ],
+        "gate": null
+      },
+      {
+        "name": "APB.pready",
+        "path": "dma_wave_top.tb.apb.pready",
+        "width": 1,
+        "samples": [
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "0",
+          "0",
+          null,
+          "0",
+          "0"
+        ],
+        "gate": null
+      },
+      {
+        "name": "APB.pwrite",
+        "path": "dma_wave_top.tb.apb.pwrite",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          null,
+          "0",
+          "0"
+        ],
+        "gate": null
+      }
+    ],
+    "note": "Asynchronous pins are cycle snapshots; exact acceptance times are in the operation table and original VCD.",
+    "colors": {
+      "skin": "default",
+      "palette": {
+        "2": {
+          "name": "white",
+          "hex": "#ffffff"
+        },
+        "3": {
+          "name": "pale amber",
+          "hex": "#ffffb4"
+        },
+        "4": {
+          "name": "soft peach",
+          "hex": "#ffe0b9"
+        },
+        "5": {
+          "name": "pastel blue",
+          "hex": "#b9e0ff"
+        },
+        "6": {
+          "name": "pale cyan",
+          "hex": "#ccfdfe"
+        },
+        "7": {
+          "name": "soft green",
+          "hex": "#cdfdc5"
+        },
+        "8": {
+          "name": "light lavender",
+          "hex": "#f0c1fb"
+        },
+        "9": {
+          "name": "soft rose",
+          "hex": "#f5c2c0"
+        }
+      },
+      "state_symbols": {
+        "0": "2",
+        "1": "5",
+        "2": "7",
+        "3": "3",
+        "4": "3",
+        "5": "4",
+        "6": "6",
+        "7": "8",
+        "8": "9",
+        "9": "9"
+      },
+      "data_symbols": [],
+      "meaning": "State colors indicate state categories; data colors identify values within one figure. Labels remain authoritative; colors repeat after six distinct data values.",
+      "references": [
+        "https://wavedrom.com/tutorial.html",
+        "https://github.com/wavedrom/wavedrom/blob/trunk/skins/default.js"
+      ]
+    },
+    "source_run": "dma_lowpower_test_sync",
+    "operation": "20_lowpower",
+    "number": 1,
+    "source_window_ns": [
+      192.5,
+      352.5
+    ],
+    "source_vcd_sha256": "ac825dc49aa8206854f750c4d21606fb2203f4fa3e044ac08eb5ff147d3bb519"
+  }
+}

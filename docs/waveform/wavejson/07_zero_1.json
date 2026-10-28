@@ -1,0 +1,688 @@
+{
+  "signal": [
+    {
+      "name": "sample clock",
+      "wave": "p...................|p."
+    },
+    {
+      "name": "source cycle",
+      "wave": "====================|==",
+      "data": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "26",
+        "27"
+      ]
+    },
+    [
+      "Thread",
+      {
+        "name": "ch0.state (internal)",
+        "wave": "5.75.74....5.75.762.|2.",
+        "data": [
+          "FET",
+          "EX",
+          "FET",
+          "EX",
+          "BAR",
+          "FET",
+          "EX",
+          "FET",
+          "EX",
+          "END",
+          "STOP",
+          "STOP"
+        ]
+      },
+      {
+        "name": "opcode (when EXEC)",
+        "wave": "x.7x.4x......6x.6x..|x.",
+        "data": [
+          "STZ",
+          "WMB",
+          "SEV",
+          "END"
+        ]
+      }
+    ],
+    [
+      "AXI write",
+      {
+        "name": "AW.valid (RDY=1)",
+        "wave": "0...10..............|0."
+      },
+      {
+        "name": "AW.addr",
+        "wave": "x...5x..............|x.",
+        "data": [
+          "A1"
+        ]
+      },
+      {
+        "name": "wvalid (RDY=1)",
+        "wave": "0...1...0...........|0."
+      },
+      {
+        "name": "wdata",
+        "wave": "x...5...x...........|x.",
+        "data": [
+          "0000000000000000"
+        ]
+      },
+      {
+        "name": "wlast",
+        "wave": "x...0..1x...........|x."
+      },
+      {
+        "name": "bvalid (RDY=1)",
+        "wave": "0........10.........|0."
+      }
+    ],
+    {
+      "name": "irq bitmap",
+      "wave": "2.............6.2...|2.",
+      "data": [
+        "0000",
+        "0001",
+        "0000",
+        "0000"
+      ]
+    }
+  ],
+  "head": {
+    "text": "Fill memory with DMASTZ - 1"
+  },
+  "foot": {
+    "text": "1 cell = 5 ns; first RIGHT edge = 372.5 ns; | = omitted idle cycles"
+  },
+  "config": {
+    "hscale": 1,
+    "skin": "default"
+  },
+  "_meta": {
+    "source_vcd": "trace.vcd",
+    "description": "Show a write operation that does not consume a loaded payload stream.",
+    "sampling": "pre-edge at RIGHT cell boundary",
+    "exclude_instruction_fetch": true,
+    "clock_source": "dma_wave_top.tb.aclk",
+    "cycle_ns": 5.0,
+    "first_right_edge_ns": 372.5,
+    "last_right_edge_ns": 507.5,
+    "right_edge_ns": [
+      372.5,
+      377.5,
+      382.5,
+      387.5,
+      392.5,
+      397.5,
+      402.5,
+      407.5,
+      412.5,
+      417.5,
+      422.5,
+      427.5,
+      432.5,
+      437.5,
+      442.5,
+      447.5,
+      452.5,
+      457.5,
+      462.5,
+      467.5,
+      null,
+      502.5,
+      507.5
+    ],
+    "idle_gaps": [
+      {
+        "after_ns": 467.5,
+        "before_ns": 502.5,
+        "omitted_samples": 6
+      }
+    ],
+    "omitted_signals": [
+      {
+        "name": "reset_n",
+        "path": "dma_wave_top.tb.rst_n",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "mf_push",
+        "path": "dma_wave_top.tb.u_dut.u_core.u_datapath.mf_push",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "mf_push_n",
+        "path": "dma_wave_top.tb.u_dut.u_core.u_datapath.mf_push_n",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "mf_pop",
+        "path": "dma_wave_top.tb.u_dut.u_core.u_datapath.mf_pop",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "mf_pop_n",
+        "path": "dma_wave_top.tb.u_dut.u_core.u_datapath.mf_pop_n",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "AR.valid",
+        "path": "dma_wave_top.tb.axi.arvalid",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "AR.ready",
+        "path": "dma_wave_top.tb.axi.arready",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "AR.addr",
+        "path": "dma_wave_top.tb.axi.araddr",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "AR.len",
+        "path": "dma_wave_top.tb.axi.arlen",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "AW.ready",
+        "path": "dma_wave_top.tb.axi.awready",
+        "reason": "READY always 1; noted on VALID row"
+      },
+      {
+        "name": "AW.len",
+        "path": "dma_wave_top.tb.axi.awlen",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "rvalid",
+        "path": "dma_wave_top.tb.axi.rvalid",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "rready",
+        "path": "dma_wave_top.tb.axi.rready",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "rid",
+        "path": "dma_wave_top.tb.axi.rid",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "rdata",
+        "path": "dma_wave_top.tb.axi.rdata",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "rlast",
+        "path": "dma_wave_top.tb.axi.rlast",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "rresp",
+        "path": "dma_wave_top.tb.axi.rresp",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "wready",
+        "path": "dma_wave_top.tb.axi.wready",
+        "reason": "READY always 1; noted on VALID row"
+      },
+      {
+        "name": "wstrb",
+        "path": "dma_wave_top.tb.axi.wstrb",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "bready",
+        "path": "dma_wave_top.tb.axi.bready",
+        "reason": "READY always 1; noted on VALID row"
+      },
+      {
+        "name": "bresp",
+        "path": "dma_wave_top.tb.axi.bresp",
+        "reason": "constant; moved to context table"
+      }
+    ],
+    "constant_context": [
+      {
+        "name": "reset_n",
+        "path": "dma_wave_top.tb.rst_n",
+        "value": "1"
+      },
+      {
+        "name": "mf_push",
+        "path": "dma_wave_top.tb.u_dut.u_core.u_datapath.mf_push",
+        "value": "0"
+      },
+      {
+        "name": "mf_push_n",
+        "path": "dma_wave_top.tb.u_dut.u_core.u_datapath.mf_push_n",
+        "value": "invalid"
+      },
+      {
+        "name": "mf_pop",
+        "path": "dma_wave_top.tb.u_dut.u_core.u_datapath.mf_pop",
+        "value": "0"
+      },
+      {
+        "name": "mf_pop_n",
+        "path": "dma_wave_top.tb.u_dut.u_core.u_datapath.mf_pop_n",
+        "value": "invalid"
+      },
+      {
+        "name": "AW.ready",
+        "path": "dma_wave_top.tb.axi.awready",
+        "value": "1 (no back-pressure)"
+      },
+      {
+        "name": "AW.len",
+        "path": "dma_wave_top.tb.axi.awlen",
+        "value": "03"
+      },
+      {
+        "name": "wready",
+        "path": "dma_wave_top.tb.axi.wready",
+        "value": "1 (no back-pressure)"
+      },
+      {
+        "name": "wstrb",
+        "path": "dma_wave_top.tb.axi.wstrb",
+        "value": "ff"
+      },
+      {
+        "name": "bready",
+        "path": "dma_wave_top.tb.axi.bready",
+        "value": "1 (no back-pressure)"
+      },
+      {
+        "name": "bresp",
+        "path": "dma_wave_top.tb.axi.bresp",
+        "value": "0"
+      }
+    ],
+    "value_labels": {
+      "A1": {
+        "signals": [
+          "AW.addr"
+        ],
+        "value": "20000000",
+        "sources": [
+          "dma_wave_top.tb.axi.awaddr"
+        ]
+      }
+    },
+    "lanes": [
+      {
+        "name": "ch0.state (internal)",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.state",
+        "width": 4,
+        "samples": [
+          "1",
+          "1",
+          "10",
+          "1",
+          "1",
+          "10",
+          "101",
+          "101",
+          "101",
+          "101",
+          "101",
+          "1",
+          "1",
+          "10",
+          "1",
+          "1",
+          "10",
+          "110",
+          "0",
+          "0",
+          null,
+          "0",
+          "0"
+        ],
+        "gate": null
+      },
+      {
+        "name": "opcode (when EXEC)",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.op",
+        "width": 8,
+        "samples": [
+          null,
+          null,
+          "1100",
+          null,
+          null,
+          "10011",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          "110100",
+          null,
+          null,
+          "0",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "gate": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.state"
+      },
+      {
+        "name": "AW.valid (RDY=1)",
+        "path": "dma_wave_top.tb.axi.awvalid",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          null,
+          "0",
+          "0"
+        ],
+        "gate": null
+      },
+      {
+        "name": "AW.addr",
+        "path": "dma_wave_top.tb.axi.awaddr",
+        "width": 32,
+        "samples": [
+          null,
+          null,
+          null,
+          null,
+          "100000000000000000000000000000",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "gate": "dma_wave_top.tb.axi.awvalid"
+      },
+      {
+        "name": "wvalid (RDY=1)",
+        "path": "dma_wave_top.tb.axi.wvalid",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
+          "1",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          null,
+          "0",
+          "0"
+        ],
+        "gate": null
+      },
+      {
+        "name": "wdata",
+        "path": "dma_wave_top.tb.axi.wdata",
+        "width": 64,
+        "samples": [
+          null,
+          null,
+          null,
+          null,
+          "0",
+          "0",
+          "0",
+          "0",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "gate": "dma_wave_top.tb.axi.wvalid"
+      },
+      {
+        "name": "wlast",
+        "path": "dma_wave_top.tb.axi.wlast",
+        "width": 1,
+        "samples": [
+          null,
+          null,
+          null,
+          null,
+          "0",
+          "0",
+          "0",
+          "1",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "gate": "dma_wave_top.tb.axi.wvalid"
+      },
+      {
+        "name": "bvalid (RDY=1)",
+        "path": "dma_wave_top.tb.axi.bvalid",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          null,
+          "0",
+          "0"
+        ],
+        "gate": null
+      },
+      {
+        "name": "irq bitmap",
+        "path": "dma_wave_top.tb.ctrl.irq",
+        "width": 16,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          null,
+          "0",
+          "0"
+        ],
+        "gate": null
+      }
+    ],
+    "note": "Asynchronous pins are cycle snapshots; exact acceptance times are in the operation table and original VCD.",
+    "colors": {
+      "skin": "default",
+      "palette": {
+        "2": {
+          "name": "white",
+          "hex": "#ffffff"
+        },
+        "3": {
+          "name": "pale amber",
+          "hex": "#ffffb4"
+        },
+        "4": {
+          "name": "soft peach",
+          "hex": "#ffe0b9"
+        },
+        "5": {
+          "name": "pastel blue",
+          "hex": "#b9e0ff"
+        },
+        "6": {
+          "name": "pale cyan",
+          "hex": "#ccfdfe"
+        },
+        "7": {
+          "name": "soft green",
+          "hex": "#cdfdc5"
+        },
+        "8": {
+          "name": "light lavender",
+          "hex": "#f0c1fb"
+        },
+        "9": {
+          "name": "soft rose",
+          "hex": "#f5c2c0"
+        }
+      },
+      "state_symbols": {
+        "0": "2",
+        "1": "5",
+        "2": "7",
+        "3": "3",
+        "4": "3",
+        "5": "4",
+        "6": "6",
+        "7": "8",
+        "8": "9",
+        "9": "9"
+      },
+      "data_symbols": [
+        {
+          "width": 64,
+          "value": "0000000000000000",
+          "symbol": "5"
+        }
+      ],
+      "meaning": "State colors indicate state categories; data colors identify values within one figure. Labels remain authoritative; colors repeat after six distinct data values.",
+      "references": [
+        "https://wavedrom.com/tutorial.html",
+        "https://github.com/wavedrom/wavedrom/blob/trunk/skins/default.js"
+      ]
+    },
+    "source_run": "direct_zero",
+    "operation": "07_zero",
+    "number": 1,
+    "source_window_ns": [
+      372.5,
+      512.5
+    ],
+    "source_vcd_sha256": "6fbe468bbb050478cafd0ba5945eda6aded0082e2c29a0a5c4c35df1b3ce3a6b"
+  }
+}
