@@ -147,20 +147,187 @@ The S/B suffix is a **condition**, not a separate physical bus. It compares the 
 
 ## 1.8 The difference between thread state and datapath state
 
-The thread can submit a load, continue fetching/executing, and submit a store while the read remains outstanding. Queues decouple instruction execution from bus timing. A channel can reach DMAWMB while its last write is still in flight. This concurrency is why instructions, address updates and bus responses do not line up one-to-one on adjacent cycles.
+The channel state describes what its **instruction thread** is doing. It does not describe every read, write or byte in the datapath. A channel can issue a load, fetch and execute later instructions, and reach a write barrier while earlier bus transfers remain outstanding. Read/write queues decouple program execution from bus timing.
 
-| Architectural CSR code | Meaning |
+The descriptions below follow the frozen [channel RTL](../../../rtl/core/dma_channel.sv), its [status encodings](../../../rtl/core/dma330_pkg.sv), and Arm DDI 0424D §2.3. They describe a **channel**, not the separate manager FSM. Workspace-specific transitions and integration details are identified explicitly.
+
+### 1.8.1 Internal state, waveform label and software-visible CSR
+
+There are two different encodings. `state` is the implementation enum used in the pictures; `CSRn[3:0]` is the status read by software. The numbers are not interchangeable. For example, internal `WFE=3` is reported as architectural `Waiting for event=4`.
+
+| Internal enum | Decimal value | WaveDrom label | CSRn[3:0] | Meaning |
+|---|---:|---|---|---|
+| `C_STOPPED` | 0 | `STOP` | `0x0` | No channel program is executing. |
+| `C_FETCH` | 1 | `FET` | `0x1` or `0x2` | Obtain the instruction at the current PC; report Cache miss while `fetch_miss=1`. |
+| `C_EXEC` | 2 | `EX` | `0x1` | Decode/execute the current instruction, or wait for its request to be accepted. |
+| `C_WFE` | 3 | `WFE` | `0x4` | Wait for the selected event. |
+| `C_WFP` | 4 | `WFP` | `0x7` | Wait for a qualifying peripheral request. |
+| `C_BARRIER` | 5 | `BAR` | `0x5` | Wait for the selected transfer direction, or submit a peripheral flush after draining both directions. |
+| `C_COMPLETING` | 6 | `END` | `0x9` | Normal program end: wait for channel data work to finish. |
+| `C_KILLING` | 7 | `KILL` | `0x8` | Cancel the program, flush queued work and retire outstanding bus obligations. |
+| `C_FAULT_COMPLETING` | 8 | `FC` | `0xe` | An abort is recorded; clean up while outstanding data work retires. |
+| `C_FAULTING` | 9 | `FLT` | `0xf` | Fault is latched; await a debug DMAKILL. |
+
+CSR `0x3` means Updating PC in the Arm architecture. This RTL has no separate Updating-PC state: arithmetic and branch updates occur on execution/wakeup transitions. Consequently, `FET → EX → FET` need not produce any observable change in `CSRn[3:0]` if no fetch miss occurs. The older local regression pictures use longer labels such as FETCH, EXEC, BARRIER, F-COMP and FAULT for the same internal enums.
+
+In this CSR layout, `[8:4]` identifies the wakeup event/peripheral while waiting, `[15]` and `[14]` identify the P/B DMAWFP selection while in WFP, and `[21]` reports the channel's non-secure state. A retained wakeup number outside WFE/WFP does not mean the channel is still waiting. Decode the low status field first, then interpret the associated context bits.
+
+State colors add a visual cue: fetching is blue, execution green, waits amber, barriers peach, normal completion cyan, killing lavender and faults rose. The label and the table above remain the meaning of the state.
+
+### 1.8.2 Normal execution and wait transitions
+
+```mermaid
+flowchart TD
+    S["STOPPED"] -->|"DMAGO accepted"| F["FETCH"]
+    F -->|"insn_valid"| E["EXEC"]
+    E -->|"instruction completes or request is accepted"| F
+    E -->|"DMAWFE"| V["WFE"]
+    V -->|"wfe_hit"| F
+    E -->|"DMAWFP"| P["WFP"]
+    P -->|"wfp_gnt"| F
+    E -->|"DMARMB / DMAWMB / DMAFLUSHP"| B["BARRIER"]
+    B -->|"selected barrier condition is satisfied"| F
+    E -->|"DMAEND"| C["COMPLETING"]
+    C -->|"dp_idle"| S
+    classDef stopped fill:#ffffff,stroke:#59636e,color:#202830
+    classDef fetch fill:#b9e0ff,stroke:#59636e,color:#202830
+    classDef execute fill:#cdfdc5,stroke:#59636e,color:#202830
+    classDef wait fill:#ffffb4,stroke:#59636e,color:#202830
+    classDef barrier fill:#ffe0b9,stroke:#59636e,color:#202830
+    classDef complete fill:#ccfdfe,stroke:#59636e,color:#202830
+    class S stopped
+    class F fetch
+    class E execute
+    class V,P wait
+    class B barrier
+    class C complete
+```
+
+An arrow represents a clocked transition when its condition is sampled. If the condition is absent, the current state remains. The diagram omits self-loops and fault/kill overrides to keep normal execution readable; those overrides are described below. No arrow implies a fixed architectural latency.
+
+### 1.8.3 Starting, fetching and executing
+
+**STOPPED — a program can be launched.** Reset enters this state. Normal completion or a completed kill also returns here. `fetch_req=0`, so the channel is not requesting a new instruction. The channel asserts `dp_flush` to discard residual queued/MFIFO context; this does not mean that every other channel or the shared instruction cache is idle.
+
+On `go_valid` while stopped, the channel loads `go_pc` into PC, captures `go_ns`, clears its request flags and FTR/FAR bookkeeping, and enters FETCH. It also requests thread-local instruction-cache invalidation. This launch does **not** reset SAR, DAR, CCR or loop counters; the program must initialize the registers it needs. A DMAGO addressed to an already running channel does not restart it. A displayed CPC value while stopped is retained register context, not proof that an instruction at that address is executing.
+
+**FETCH — obtain a complete instruction.** The channel asserts `fetch_req` for its current PC. Its fetch unit may satisfy the request from a local line buffer or request a shared-cache response, including the next line for a crossing instruction. `insn_valid` permits FETCH → EXEC. Until a usable instruction arrives, PC remains unchanged and the channel stays in FETCH. A canceled/retried refill is not a delivered instruction; see the [cache cancellation operation](14_cache.md).
+
+Within FETCH, software sees Executing when `fetch_miss=0` and Cache miss when `fetch_miss=1`. In this implementation, `fetch_miss` reflects the fetch unit waiting in `F_MISS` or `F_NEXT`; it is not a separate channel enum or a guarantee that an external AR transfer occurs in that cycle. A `fetch_err` records an instruction-fetch fault and FAR=PC, then enters FAULT_COMPLETING rather than executing the returned bytes.
+
+**EXEC — act on the decoded instruction.** Simple operations such as DMAMOV, DMANOP, address arithmetic and DMASEV update their effects and return to FETCH. Loop instructions also return to FETCH, choosing either the sequential PC or a branch target. For loads and stores, leaving EXEC normally means the descriptor was accepted by the datapath, not that AXI data has finished moving.
+
+| Instruction class in EXEC | Condition to leave EXEC | PC/address effect |
+|---|---|---|
+| DMALD / DMALDP, with a true execution condition | `ld_ready=1` | Advance PC; increment SAR by the descriptor's useful byte count if source incrementing is enabled. |
+| DMAST / DMASTP / DMASTZ, with a true execution condition | `st_ready=1` | Advance PC; increment DAR by the descriptor's useful byte count if destination incrementing is enabled. |
+| Conditional load/store whose condition is false | No request is issued | Advance PC as a skipped instruction; do not increment SAR/DAR for a transfer. |
+| DMAWFE / DMAWFP / barrier | Enter the corresponding wait state | Keep PC at this instruction until its wait completes. |
+| DMAEND / DMAKILL | Enter COMPLETING / KILLING | Do not fetch the following instruction. |
+| Invalid instruction, invalid operand or other execute-time fault | Enter FAULT_COMPLETING | The normal instruction effect is suppressed. |
+
+If a required `ld_ready` or `st_ready` is low, the channel stays in EXEC with the same instruction/PC. Queue capacity, MFIFO admission or contention can therefore extend EX without producing WFE, WFP or BAR. Other channel and AXI activity can continue during this stall.
+
+### 1.8.4 Waiting for an event, a peripheral or a barrier
+
+**WFE — wait for an event.** DMAWFE captures the event number in `wake_num` and enters WFE. The channel asserts `wfe_valid` for that event. On `wfe_hit`, it advances PC past DMAWFE and returns to FETCH. A sticky event set before the wait can satisfy it; the producer need not pulse DMASEV during the displayed WFE interval. An interrupt-routed event (`INTEN[e]=1`) does not satisfy WFE in this design.
+
+WFE suspends instruction progress, not previously submitted bus work, and it releases the load-lock. If the DMAWFE invalidation option is set, the cache-maintenance request is made when that instruction executes, before waiting for the event. See [late and sticky events](13_events.md).
+
+**WFP — wait for peripheral permission.** DMAWFP records the peripheral number and S/B/P selection, then asserts `wfp_valid` while waiting. The release condition is the core-side `wfp_gnt` from peripheral control. On a grant, the channel records request-type/last context, advances PC and returns to FETCH. S and B select single/burst request flags with `req_last=0`; P copies burst/last information from the granted peripheral context. The detailed qualification rules are illustrated in [request types](12_request_types.md).
+
+External DR acceptance and internal WFP grant are different events, especially across CDC. A request can already be pending before WFP begins. Leaving WFP permits subsequent instructions to transfer data; it does not establish that payload was read/written or that a DA acknowledgement has reached the peripheral. See [memory-to-peripheral](10_m2p.md), [peripheral-to-memory](11_p2m.md) and [CDC](19_cdc.md).
+
+**BARRIER — apply the instruction's ordering condition.** There is one internal state for three operations, distinguished by `barrier_wr` and `barrier_fl`:
+
+| Instruction | Condition used by this RTL | What happens on release |
+|---|---|---|
+| DMARMB | `rd_busy=0` | Advance PC and return to FETCH; writes need not also be idle. |
+| DMAWMB | `wr_busy=0` | Advance PC and return to FETCH; reads need not also be idle. |
+| DMAFLUSHP | First require `dp_idle`; then require `flush_valid && flush_ready` | Clear request-type/last flags, advance PC and return to FETCH. |
+
+For DMAFLUSHP, `flush_ready` means peripheral control has accepted the flush request into its acknowledgement queue. It does **not** mean that the external DA flush request and returning DR flush acknowledgement have already completed. Peripheral control manages that exchange separately. See [peripheral transfers](10_m2p.md).
+
+PC remains on the barrier instruction until its release condition is met, and the load-lock is released. This workspace does not automatically enter BARRIER for every SAR/DAR/CCR alignment discontinuity described by Arm; see [implementation boundaries](99_validation.md#implementation-boundaries).
+
+### 1.8.5 Completing, killing and handling a fault
+
+These states all stop normal instruction execution, but the reason, cleanup policy and destination state differ:
+
+| State | Entry | While resident | Exit |
+|---|---|---|---|
+| COMPLETING | Execute DMAEND | Allow queued/in-flight data work to finish normally; `dp_flush` is not asserted by this state. | `dp_idle=1` → STOPPED; thread-local cache maintenance is requested at completion. |
+| KILLING | Execute DMAKILL, or receive `dbg_kill` while not stopped | Assert `dp_flush`; discard queued work/returning read payload as applicable, while the bus engines retire obligations that cannot be canceled. | `dp_idle=1` → STOPPED; clear FTR and request thread-local cache maintenance. |
+| FAULT_COMPLETING | Fetch/execute fault, eligible data-bus error, debug fault or aborting watchdog indication | Latch fault information, assert `dp_flush`, and retire outstanding data work without continuing the program. | `dp_idle=1` → FAULTING; fault information remains latched. |
+| FAULTING | Fault cleanup has reached `dp_idle` | Keep the channel halted with `dp_flush=1`; the channel's `faulting` indication remains asserted. | Debug DMAKILL → KILLING → STOPPED. |
+
+```mermaid
+flowchart TD
+    A["Active channel"] -->|"fault accepted"| FC["FAULT_COMPLETING"]
+    FC -->|"dp_idle"| FT["FAULTING"]
+    FT -->|"debug DMAKILL"| K["KILLING"]
+    A -->|"program DMAKILL or debug kill"| K
+    K -->|"dp_idle; clear FTR"| S["STOPPED"]
+    classDef fault fill:#f5c2c0,stroke:#59636e,color:#202830
+    classDef kill fill:#f0c1fb,stroke:#59636e,color:#202830
+    classDef normal fill:#ffffff,stroke:#59636e,color:#202830
+    class FC,FT fault
+    class K kill
+    class A,S normal
+```
+
+The second diagram summarizes the ordinary abort/recovery path; exact event eligibility and priority are described below. `faulting` is asserted in **both** FC and FLT. FC can remain visible for a long time when the bus does not retire outstanding work; FLT is the halted fault state after that cleanup condition is satisfied. DMAGO alone cannot recover a faulted channel because launch is accepted only in STOPPED.
+
+The waveform label `END` means COMPLETING, not “already stopped” and not “IRQ asserted.” DMAEND does not itself execute DMASEV. For an ordered completion notification, the illustrated program uses `DMAWMB; DMASEV; DMAEND`: the barrier waits for writes, DMASEV signals the configured event/IRQ, and DMAEND terminates the thread. See [copy and completion](02_copy.md).
+
+Kill is cancellation, not rollback. An AXI transfer already accepted by the interconnect must still obey the bus protocol; destination bytes already written remain changed. The read/write tracking queues are not flushed as if those transactions never existed. FAR can retain diagnostic context after kill; a subsequent accepted DMAGO clears its bookkeeping. See [kill](15_kill.md) and [precise/imprecise faults](16_faults.md).
+
+For recovery, read CSR/CPC/FTR/FAR before issuing debug DMAKILL, wait until CSR reports Stopped, repair the cause and relaunch a correctly initialized program. KILLING clears FTR only when its idle condition is satisfied. Neither kill nor a watchdog report guarantees a bounded stop time if an external slave never retires a required response.
+
+### 1.8.6 What the busy and idle conditions actually mean
+
+For the selected channel, the channel RTL defines `dp_idle = !rd_busy && !wr_busy`. These busy signals are per channel, even though the engines and MFIFO are shared.
+
+| Signal | What keeps it asserted in the frozen implementation |
 |---|---|
-| 0 | Stopped |
-| 1 / 2 | Executing / Cache miss |
-| 3 | Updating PC (not used by this RTL) |
-| 4 / 5 / 7 | Waiting for event / At barrier / Waiting for peripheral |
-| 8 / 9 | Killing / Completing |
-| 14 / 15 | Fault completing / Faulting |
+| `rd_busy` | A read descriptor is queued, or the read tracking queue still contains an outstanding transfer. Peripheral-acknowledgement handling can also delay retirement. |
+| `wr_busy` | A store is queued/active, or the write-response tracking queue is not empty. Completing WLAST alone is insufficient while a B response remains outstanding. |
+| `dp_idle` | Both of the above are clear; this does not directly test that MFIFO occupancy is zero, that instruction refills are idle, or that every peripheral acknowledgement has reached its external pin. |
 
-The internal channel enum is `STOPPED=0, FETCH=1, EXEC=2, WFE=3, WFP=4, BARRIER=5, COMPLETING=6, KILLING=7, FAULT_COMPLETING=8, FAULTING=9`. The SVG labels shorten these to STOP/FETCH/EXEC/WFE/WFP/BARRIER/END/KILL/F-COMP/FAULT. Observe CSR when reasoning about software-visible state and the internal enum when reasoning about execution scheduling.
+Thus a channel may wait in WFE/WFP while `rd_busy` or `wr_busy` is still high. Conversely, it can be in EXEC with both low while doing register arithmetic. `COMPLETING → STOPPED` waits for channel data work, not every other channel. Residual MFIFO bytes are cleaned through the channel's flush path; a nonzero occupancy by itself is not an extra explicit test in the completion-state transition.
 
-Normal END and abort paths can wait for outstanding work. Killing does not revoke an AXI transaction already accepted by the interconnect and does not restore old destination bytes.
+Instruction-refill cancellation is handled separately by the fetch/cache protocol. A data-path `dp_idle` decision must not be read as proof that every shared-cache response has vanished. Whole-core sleep has additional quiescence checks; see [low power](20_lowpower.md).
+
+### 1.8.7 Fault/kill overrides and PC interpretation
+
+The clocked FSM first evaluates its normal state action and then applies override conditions. For competing **state assignments** on the same edge, later applicable assignments in this RTL win:
+
+| Increasing state-assignment priority | Applicable behavior |
+|---|---|
+| Normal state logic | Fetch, instruction acceptance, wakeup, barrier or completion transition; execute/fetch faults are handled here too. |
+| Data-read/write error | While not STOPPED/KILLING, record error bits; enter FAULT_COMPLETING unless already in a fault state. |
+| Debug instruction/event/operand fault | Record the corresponding FTR bits and debug-instruction bit; enter FAULT_COMPLETING unless already in a fault state. |
+| Aborting watchdog indication | In FETCH, EXEC, WFE, WFP, BARRIER or COMPLETING, record lockup and enter FAULT_COMPLETING. |
+| Debug kill | For any state other than STOPPED, select KILLING. |
+
+Reset initializes STOPPED independently of this sequence. The priority table concerns the selected next state; it does not imply that every earlier register assignment or already accepted datapath action is undone. Fault bits can still be latched when a same-edge debug kill wins the state selection.
+
+WFE/WFP are legitimate unbounded waits. The core's watchdog normally excludes them when no channel data work remains; outstanding queued/in-flight work can keep watchdog monitoring active. KILLING and existing fault states do not take a fresh watchdog abort transition through `wd_can_fault`, although the watchdog can retain/report diagnostic information. These are workspace watchdog details, not additional Arm channel states.
+
+During FETCH/EXEC, PC identifies the instruction being fetched/executed; during WFE/WFP/BARRIER it stays on the instruction whose condition has not completed. PC advances when a wait is released. During END/KILL/fault handling, it is retained context rather than a stream of new instruction executions. Precise aborts identify the offending instruction; an imprecise data-bus error can arrive after PC has advanced past the initiating load/store. Inspect FTR/FAR and the accepted bus transactions instead of assuming that a bus error belongs to the instruction currently displayed at CPC. TRM §2.8 explains precise versus imprecise aborts.
+
+### 1.8.8 Following a state sequence in a waveform
+
+| Example | State sequence to recognize | Main observation |
+|---|---|---|
+| [Launch and ordinary copy](01_launch.md) | STOP → FET → EX, with repeated FET/EX pairs | Accepted DMAGO starts fetching; a descriptor can leave EX before its AXI response returns. |
+| [Wait for an event](13_events.md) | EX → WFE → FET | Find `wfe_hit` and the sticky event context; other data work may continue while PC is held. |
+| [Peripheral-paced transfer](10_m2p.md) | EX → WFP → FET | Find core-side grant separately from external DR/DA handshakes and payload movement. |
+| [Write completion](02_copy.md) | EX → BAR → FET → EX; eventually END → STOP | The write barrier releases after write retirement; notification and thread termination are separate instructions. |
+| [Cancellation](15_kill.md) | WFE → KILL → STOP | A debug kill overrides the wait without consuming the awaited event. |
+| [Abort](16_faults.md) | EX or another eligible active state → FC → FLT | FC drains/cleans up; FLT remains latched until software requests debug kill. |
+
+Each visible cell is a pre-edge snapshot. A grant, final response or error sampled at its right boundary causes a state update that is visible in the following cell. Idle compression can omit repeated state cells, so use the source-cycle row and milestone times rather than inferring elapsed cycles from adjacent labels alone. The [waveform conventions](00_conventions.md) define the sampling rule in full.
 
 ## 1.9 MFIFO allocation, reservation and load-lock
 
