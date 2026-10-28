@@ -399,7 +399,11 @@ dm_ev_kind_t dma330_step(dma330_t* m)
         bytes  = 0;
         switch (cls) {
         case I_UNDEF: case I_GO:  fault |= FT_UNDEF_INSTR; break;
-        case I_MOV:               if (b1 > 2) fault |= FT_OPERAND_INVALID; break;
+        case I_MOV:
+            if (b1 > 2) fault |= FT_OPERAND_INVALID;
+            if (b1 == 1 && m->ns && (!(CCR_SRC_PROT(imm32) & 2u) ||
+                                     !(CCR_DST_PROT(imm32) & 2u))) fault |= FT_CH_RDWR_ERR;
+            break;
         case I_SEV: case I_WFE:
             if (ev_range) fault |= FT_OPERAND_INVALID;
             if (ev_sec)   fault |= FT_CH_EVNT_ERR;
@@ -452,7 +456,7 @@ dm_ev_kind_t dma330_step(dma330_t* m)
                 /* Endian swap of g bytes: g within the bus, DAR aligned to g;
                  * INCR: whole groups per burst, FIXED: per beat (TRM 2.11.2) */
                 swap_bad = (cls != I_STZ) && sw != 0 &&
-                           (sw > 4 || sw > m->max_size || (m->dar & gm & 0xFu) != 0 ||
+                           (sw > 4 || (m->dar & gm & 0xFu) != 0 ||
                             (inc ? (bytes & gm) != 0 : sw > sz));
                 if (sz > m->max_size || swap_bad || (m->ns && !(CCR_DST_PROT(m->ccr) & 2u)))
                     fault |= FT_CH_RDWR_ERR;
@@ -628,7 +632,17 @@ dm_ev_kind_t dma330_step(dma330_t* m)
             break;
         }
 
-        case I_MOV:
+        case I_MOV: {
+            int dst_disc = (b1 == 2 && VALID(m, DM_R_DAR) &&
+                            ((m->dar ^ imm32) & (m->cfg.bus_bytes - 1u))) ||
+                           (b1 == 1 && VALID(m, DM_R_CCR) &&
+                            (CCR_SWAP(m->ccr) != CCR_SWAP(imm32) ||
+                             CCR_DST_INC(m->ccr) != CCR_DST_INC(imm32) ||
+                             (!CCR_DST_INC(m->ccr) && CCR_DST_SIZE(m->ccr) != CCR_DST_SIZE(imm32))));
+            if (dst_disc) {
+                m->stream_len = 0;
+                m->off_mask = 1;
+            }
             switch (b1 & 3u) {
             case 0:  m->sar = imm32; SET_VALID(m, DM_R_SAR); break;
             case 1:  m->ccr = imm32; SET_VALID(m, DM_R_CCR); break;
@@ -636,6 +650,7 @@ dm_ev_kind_t dma330_step(dma330_t* m)
             }
             m->pc += len;
             break;
+        }
 
         default:                       /* I_UNDEF / I_GO fault above */
             return finish(m, DM_EV_UNKNOWN);

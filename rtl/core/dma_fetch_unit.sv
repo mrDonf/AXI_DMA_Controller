@@ -34,7 +34,7 @@ module dma_fetch_unit
   output logic                      insn_valid,
   output logic [INSN_W-1:0]         insn,         // byte 0 = opcode
   output logic                      fetch_err,
-  output logic                      miss,         // waiting on the i-cache
+  output logic                      miss,         // front-end pending, NOT architectural Cache miss
 
   // Instruction cache port
   output logic                      ic_req,
@@ -48,7 +48,7 @@ module dma_fetch_unit
   localparam int LINE_LSB = $clog2(LINE_BYTES);
   localparam int TAG_W    = ADDR_W - LINE_LSB;
 
-  typedef enum logic [1:0] {F_IDLE, F_MISS, F_NEXT} fstate_e;
+  typedef enum logic [1:0] {F_IDLE, F_MISS, F_NEXT, F_THIRD} fstate_e;
   fstate_e fstate;
 
   logic                    lb_valid;
@@ -56,6 +56,7 @@ module dma_fetch_unit
   logic [LINE_BYTES*8-1:0] lb_data;
   logic [TAG_W-1:0]        req_tag;     // line being requested
   logic                    aborted;     // thread gave up while waiting
+  logic [INSN_W-1:0]        partial_insn;
 
   logic [TAG_W-1:0]        pc_tag;
   logic [LINE_LSB-1:0]     pc_off;
@@ -81,8 +82,8 @@ module dma_fetch_unit
     for (int k = 0; k < MAX_INSN_B; k++) begin
       int idx;
       idx = int'(off) + k;
-      bytes[k*8 +: 8] = (idx < LINE_BYTES) ? cur_line[idx*8 +: 8]
-                                           : next_line[(idx - LINE_BYTES)*8 +: 8];
+        bytes[k*8 +: 8] = (idx < LINE_BYTES) ? cur_line[idx*8 +: 8] :
+                          (idx < 2*LINE_BYTES) ? next_line[(idx - LINE_BYTES)*8 +: 8] : 8'd0;
     end
     return bytes;
   endfunction
@@ -98,6 +99,7 @@ module dma_fetch_unit
       insn_valid <= 1'b0;
       insn       <= '0;
       fetch_err  <= 1'b0;
+      partial_insn <= '0;
     end else begin
       insn_valid <= 1'b0;
       fetch_err  <= 1'b0;
@@ -144,12 +146,36 @@ module dma_fetch_unit
             if (fetch_req && !aborted && !inv && !ic_resp_retry) begin
               if (ic_resp_err) begin
                 fetch_err <= 1'b1;
+              end else if (int'(pc_off) + int'(insn_len(opcode)) > 2*LINE_BYTES) begin
+                // A six-byte instruction at offset 3 of a four-byte line
+                // requires three cache lines (TRM CR1 permits four-byte lines).
+                partial_insn <= assemble(lb_data, ic_resp_data, pc_off);
+                req_tag <= req_tag + 1'b1;
+                fstate <= F_THIRD;
               end else begin
                 insn       <= assemble(lb_data, ic_resp_data, pc_off);
                 insn_valid <= 1'b1;
                 lb_valid <= 1'b1;
                 lb_tag   <= req_tag;
                 lb_data  <= ic_resp_data;
+              end
+            end
+          end
+        end
+
+        F_THIRD: begin
+          if (ic_resp_valid) begin
+            fstate <= F_IDLE;
+            if (fetch_req && !aborted && !inv && !ic_resp_retry) begin
+              if (ic_resp_err) fetch_err <= 1'b1;
+              else begin
+                for (int k=0; k<MAX_INSN_B; k++)
+                  insn[k*8 +: 8] <= (k < 2*LINE_BYTES-int'(pc_off)) ?
+                    partial_insn[k*8 +: 8] : ic_resp_data[(k-2*LINE_BYTES+int'(pc_off))*8 +: 8];
+                insn_valid <= 1'b1;
+                lb_valid <= 1'b1;
+                lb_tag <= req_tag;
+                lb_data <= ic_resp_data;
               end
             end
           end

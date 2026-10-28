@@ -80,8 +80,10 @@ module dma_datapath
   output logic [NUM_CH-1:0]   st_ready,
   output logic [NUM_CH-1:0]   st_short,
   input  logic [NUM_CH-1:0]   ch_flush,
+  input  logic [NUM_CH-1:0]   ch_running,
   output logic [NUM_CH-1:0]   rd_busy,
   output logic [NUM_CH-1:0]   wr_busy,
+  output logic [NUM_CH-1:0]   wr_beat,
   output logic [NUM_CH-1:0]   rd_err,
   output logic [NUM_CH-1:0]   wr_err,
   output logic [ADDR_W-1:0]   rd_err_addr,
@@ -267,7 +269,10 @@ module dma_datapath
 
   // No line can ever be freed: some stuck channel holds lines, every channel
   // that holds lines is stuck, and no channel is releasing its last line
-  assign deadlock = |(stuck & holder) && ((holder & ~stuck) == '0) && (release_ch == '0);
+  // TRM 2.8.3: queues drained and every running channel blocked at DMALD.
+  // A legitimate external wait in any running thread defers detection.
+  assign deadlock = |(stuck & holder) && ((ch_running & ~stuck) == '0) &&
+                    !(|rd_busy) && !(|wr_busy) && (release_ch == '0);
 
   // One load accepted per cycle (the reservation uses the sum of all channels)
   dma_rr_arbiter #(.N(NUM_CH)) u_adm_arb (
@@ -392,6 +397,7 @@ module dma_datapath
     .m_bid         (m_bid),
     .m_bresp       (m_bresp),
     .wr_busy       (wr_busy),
+    .wr_beat       (wr_beat),
     .wr_active     (wr_active),
     .store_pending (store_pending),
     .wr_err        (wr_err),

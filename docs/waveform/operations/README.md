@@ -1,6 +1,6 @@
 # DMA-330 design guide
 
-Understand the frozen design through **20 operations and 30 WaveDrom illustrations**. Each operation uses one or two focused pictures, followed by measured milestones and decoded data values.
+Understand the frozen design through **24 operations and 37 WaveDrom illustrations**. Each operation uses one or two focused pictures, followed by measured milestones and decoded data values.
 
 [Repository](../../../README.md) · [Background](00_background.md) · [Waveform conventions](00_conventions.md) · [Validation](99_validation.md)
 
@@ -53,6 +53,17 @@ Study cancellation, faults, shared resources, security, clock crossings and slee
 | 19 | [Pass a peripheral request across unrelated clocks](19_cdc.md) | 1 |
 | 20 | [Accept sleep and wake the DMA for an APB access](20_lowpower.md) | 2 |
 
+## 4. Architectural phases and ordering details
+
+Current-revision PC phases, implicit barriers, wide endian groups and precise CCR permission checks.
+
+| # | Operation | Figures |
+|---:|---|---:|
+| 21 | [Distinguish execution, PC calculation and a real cache refill](21_thread_phases.md) | 2 |
+| 22 | [Drain an implicit barrier before changing the transfer stream](22_reconfiguration.md) | 2 |
+| 23 | [Swap 128-bit groups across narrower AXI beats](23_swap128.md) | 2 |
+| 24 | [Reject a forbidden non-secure CCR before committing it](24_ccr_permissions.md) | 1 |
+
 ## Reference and editable sources
 
 | Need | Open |
@@ -63,6 +74,6 @@ Study cancellation, faults, shared resources, security, clock crossings and slee
 | Review measured checks and implementation boundaries | [Check results](99_validation.md#validation-record) · [Arm compatibility notes](99_validation.md#implementation-boundaries) |
 | Locate source-run names, signal paths and sampled values | `_meta` inside each [WaveJSON file](../wavejson/) |
 
-The architectural baseline is **Arm DMA-330 r1p2 TRM, DDI 0424D**. Read the implementation boundaries before treating workspace behavior as an Arm requirement. All 82 original RTL and testbench source files remain frozen.
+The architectural baseline is **Arm DMA-330 r1p2 TRM, DDI 0424D**. Read the implementation boundaries before treating workspace behavior as an Arm requirement. All 85 original RTL and testbench source files remain frozen.
 
 This published guide contains only `operations/`, `svg/` and `wavejson/`. Background and reading conventions are included here so every operation can be read directly on GitHub. VCDs, the exhaustive archive, reproduction scripts and new teaching tests remain local.

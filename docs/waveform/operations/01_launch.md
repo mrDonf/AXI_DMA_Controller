@@ -4,9 +4,6 @@
 [Guide index](README.md) · [Background](00_background.md) · [Next: 2. Copy a four-beat memory burst and report completion →](02_copy.md)
 <!-- /reading-nav -->
 
-
-
-
 ## Purpose
 
 Start one channel at a known program address, then distinguish code fetching from source-data reads.
@@ -52,7 +49,8 @@ Full values for the short labels in this picture (matching D labels mean matchin
 
 | Label | Signal(s) | Full value |
 |---|---|---|
-| A1 | AR.addr | `00010000` |
+| A1 | ch0.PC | `00010006` |
+| A2 | AR.addr | `00010000` |
 
 Useful constant context: `APB.pready=1`; `AR.ready=1 (no back-pressure)`; `AR.len=03`.
 

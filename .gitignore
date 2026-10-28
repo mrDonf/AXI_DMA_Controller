@@ -19,6 +19,14 @@ sim/*.ucdb
 sim/*.qdb
 sim/*.qpg
 sim/*.qtl
+sim/wave_work/
+sim/.wave_deps/
+sim/waves/
+
+# Local waveform recordings and the superseded exhaustive gallery
+*.vcd
+*.vcd.gz
+docs/waveform/archive/
 
 syn/constraints/axi_dma330.sdc
 

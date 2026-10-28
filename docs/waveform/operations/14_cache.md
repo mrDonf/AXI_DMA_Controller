@@ -4,9 +4,6 @@
 [Guide index](README.md) · [Background](00_background.md) · [← Previous: 13. Synchronize a channel using a sticky event](13_events.md) · [Next: 15. Kill a channel waiting on an event →](15_kill.md)
 <!-- /reading-nav -->
 
-
-
-
 ## Purpose
 
 Understand why invalidation returns retry rather than stale executable bytes.

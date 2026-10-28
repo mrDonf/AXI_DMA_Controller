@@ -2,11 +2,11 @@
   "signal": [
     {
       "name": "sample clock",
-      "wave": "p......................|p."
+      "wave": "p...................|p."
     },
     {
       "name": "source cycle",
-      "wave": "=======================|==",
+      "wave": "====================|==",
       "data": [
         "0",
         "1",
@@ -28,9 +28,6 @@
         "17",
         "18",
         "19",
-        "20",
-        "21",
-        "22",
         "26",
         "27"
       ]
@@ -39,19 +36,22 @@
       "Thread",
       {
         "name": "ch0.state (internal)",
-        "wave": "5.75.75.75.74.5.75.762.|2.",
+        "wave": "8578578574.85785762.|2.",
         "data": [
+          "UPC",
           "FET",
           "EX",
+          "UPC",
           "FET",
           "EX",
-          "FET",
-          "EX",
+          "UPC",
           "FET",
           "EX",
           "BAR",
+          "UPC",
           "FET",
           "EX",
+          "UPC",
           "FET",
           "EX",
           "END",
@@ -61,25 +61,25 @@
       },
       {
         "name": "NS thread",
-        "wave": "1......................|1."
+        "wave": "1...................|1."
       }
     ],
     [
       "AXI read",
       {
         "name": "AR.valid (RDY=1)",
-        "wave": "0...10.................|0."
+        "wave": "0...10..............|0."
       },
       {
         "name": "AR.addr",
-        "wave": "x...5x.................|x.",
+        "wave": "x...5x..............|x.",
         "data": [
           "A1"
         ]
       },
       {
         "name": "AR.PROT",
-        "wave": "x...2x.................|x.",
+        "wave": "x...2x..............|x.",
         "data": [
           "2"
         ]
@@ -89,18 +89,18 @@
       "AXI write",
       {
         "name": "AW.valid (RDY=1)",
-        "wave": "0.........10...........|0."
+        "wave": "0......10...........|0."
       },
       {
         "name": "AW.addr",
-        "wave": "x.........5x...........|x.",
+        "wave": "x......5x...........|x.",
         "data": [
           "A2"
         ]
       },
       {
         "name": "AW.PROT",
-        "wave": "x.........2x...........|x.",
+        "wave": "x......2x...........|x.",
         "data": [
           "2"
         ]
@@ -108,7 +108,7 @@
     ],
     {
       "name": "irq bitmap",
-      "wave": "2................6.2...|2.",
+      "wave": "2.............6.2...|2.",
       "data": [
         "0000",
         "0001",
@@ -121,7 +121,7 @@
     "text": "Execute a non-secure channel program - 1"
   },
   "foot": {
-    "text": "1 cell = 5 ns; first RIGHT edge = 387.5 ns; | = omitted idle cycles"
+    "text": "1 cell = 5 ns; first RIGHT edge = 392.5 ns; | = omitted idle cycles"
   },
   "config": {
     "hscale": 1,
@@ -134,10 +134,9 @@
     "exclude_instruction_fetch": true,
     "clock_source": "dma_wave_top.tb.aclk",
     "cycle_ns": 5.0,
-    "first_right_edge_ns": 387.5,
-    "last_right_edge_ns": 522.5,
+    "first_right_edge_ns": 392.5,
+    "last_right_edge_ns": 527.5,
     "right_edge_ns": [
-      387.5,
       392.5,
       397.5,
       402.5,
@@ -158,17 +157,15 @@
       477.5,
       482.5,
       487.5,
-      492.5,
-      497.5,
       null,
-      517.5,
-      522.5
+      522.5,
+      527.5
     ],
     "idle_gaps": [
       {
-        "after_ns": 497.5,
-        "before_ns": 517.5,
-        "omitted_samples": 3
+        "after_ns": 487.5,
+        "before_ns": 522.5,
+        "omitted_samples": 6
       }
     ],
     "omitted_signals": [
@@ -221,24 +218,21 @@
         "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.state",
         "width": 4,
         "samples": [
-          "1",
-          "1",
-          "10",
-          "1",
+          "1010",
           "1",
           "10",
-          "1",
+          "1010",
           "1",
           "10",
-          "1",
+          "1010",
           "1",
           "10",
           "101",
           "101",
-          "1",
+          "1010",
           "1",
           "10",
-          "1",
+          "1010",
           "1",
           "10",
           "110",
@@ -260,9 +254,6 @@
           "0",
           "0",
           "1",
-          "0",
-          "0",
-          "0",
           "0",
           "0",
           "0",
@@ -311,9 +302,6 @@
           null,
           null,
           null,
-          null,
-          null,
-          null,
           null
         ],
         "gate": "dma_wave_top.tb.axi.arvalid"
@@ -323,9 +311,6 @@
         "path": "dma_wave_top.tb.axi.awvalid",
         "width": 1,
         "samples": [
-          "0",
-          "0",
-          "0",
           "0",
           "0",
           "0",
@@ -357,9 +342,6 @@
         "path": "dma_wave_top.tb.axi.awaddr",
         "width": 32,
         "samples": [
-          null,
-          null,
-          null,
           null,
           null,
           null,
@@ -405,9 +387,6 @@
           "0",
           "0",
           "0",
-          "0",
-          "0",
-          "0",
           "1",
           "1",
           "0",
@@ -425,9 +404,6 @@
         "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.ns",
         "width": 1,
         "samples": [
-          "1",
-          "1",
-          "1",
           "1",
           "1",
           "1",
@@ -481,9 +457,6 @@
           null,
           null,
           null,
-          null,
-          null,
-          null,
           null
         ],
         "gate": "dma_wave_top.tb.axi.arvalid"
@@ -493,9 +466,6 @@
         "path": "dma_wave_top.tb.axi.awprot",
         "width": 3,
         "samples": [
-          null,
-          null,
-          null,
           null,
           null,
           null,
@@ -570,7 +540,9 @@
         "6": "6",
         "7": "8",
         "8": "9",
-        "9": "9"
+        "9": "9",
+        "10": "8",
+        "11": "4"
       },
       "data_symbols": [],
       "meaning": "State colors indicate state categories; data colors identify values within one figure. Labels remain authoritative; colors repeat after six distinct data values.",
@@ -583,9 +555,9 @@
     "operation": "18_security",
     "number": 1,
     "source_window_ns": [
-      387.5,
-      527.5
+      392.5,
+      532.5
     ],
-    "source_vcd_sha256": "60121df3921fa220770a11f48d31e144aa0f4b6459098764562a3c442d396489"
+    "source_vcd_sha256": "04a9f469f8a5cc198895470c4c613838c8939e3b6a1d875d0b6bff8a846e1406"
   }
 }

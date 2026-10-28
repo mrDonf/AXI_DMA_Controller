@@ -1,0 +1,498 @@
+{
+  "signal": [
+    {
+      "name": "sample clock",
+      "wave": "p.........|p."
+    },
+    {
+      "name": "source cycle",
+      "wave": "==========|==",
+      "data": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "28",
+        "29"
+      ]
+    },
+    [
+      "Thread",
+      {
+        "name": "ch0.state (internal)",
+        "wave": "5.....799.|9.",
+        "data": [
+          "FET",
+          "EX",
+          "FC",
+          "FLT",
+          "FLT"
+        ]
+      },
+      {
+        "name": "ch0.CSR status",
+        "wave": "5..7...99.|9.",
+        "data": [
+          "MISS",
+          "RUN",
+          "FC",
+          "FLT",
+          "FLT"
+        ]
+      },
+      {
+        "name": "ftr",
+        "wave": "2......9..|9.",
+        "data": [
+          "00000000",
+          "00000080",
+          "00000080"
+        ]
+      },
+      {
+        "name": "dp_flush",
+        "wave": "0......1..|1."
+      }
+    ],
+    {
+      "name": "irq_abort",
+      "wave": "0......1..|1."
+    }
+  ],
+  "head": {
+    "text": "Reject a forbidden non-secure CCR before committing it - 1"
+  },
+  "foot": {
+    "text": "1 cell = 5 ns; first RIGHT edge = 312.5 ns; | = omitted idle cycles"
+  },
+  "config": {
+    "hscale": 1,
+    "skin": "default"
+  },
+  "_meta": {
+    "source_vcd": "trace.vcd",
+    "description": "Show a precise security abort at DMAMOV CCR rather than a later data-access error.",
+    "sampling": "pre-edge at RIGHT cell boundary",
+    "exclude_instruction_fetch": true,
+    "clock_source": "dma_wave_top.tb.aclk",
+    "cycle_ns": 5.0,
+    "first_right_edge_ns": 312.5,
+    "last_right_edge_ns": 457.5,
+    "right_edge_ns": [
+      312.5,
+      317.5,
+      322.5,
+      327.5,
+      332.5,
+      337.5,
+      342.5,
+      347.5,
+      352.5,
+      357.5,
+      null,
+      452.5,
+      457.5
+    ],
+    "idle_gaps": [
+      {
+        "after_ns": 357.5,
+        "before_ns": 452.5,
+        "omitted_samples": 18
+      }
+    ],
+    "omitted_signals": [
+      {
+        "name": "reset_n",
+        "path": "dma_wave_top.tb.rst_n",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "ch0.PC",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.pc",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "opcode (when EXEC)",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.op",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "far",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.far",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "rd_err",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.rd_err",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "wr_err",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.wr_err",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "ftrd",
+        "path": "dma_wave_top.tb.u_dut.u_core.ftrd",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "mgr_faulting",
+        "path": "dma_wave_top.tb.u_dut.u_core.mgr_faulting",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "AR.valid",
+        "path": "dma_wave_top.tb.axi.arvalid",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "AR.ready",
+        "path": "dma_wave_top.tb.axi.arready",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "AR.addr",
+        "path": "dma_wave_top.tb.axi.araddr",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "AR.len",
+        "path": "dma_wave_top.tb.axi.arlen",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "AW.valid",
+        "path": "dma_wave_top.tb.axi.awvalid",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "AW.ready",
+        "path": "dma_wave_top.tb.axi.awready",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "AW.addr",
+        "path": "dma_wave_top.tb.axi.awaddr",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "AW.len",
+        "path": "dma_wave_top.tb.axi.awlen",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "rvalid",
+        "path": "dma_wave_top.tb.axi.rvalid",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "rready",
+        "path": "dma_wave_top.tb.axi.rready",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "rid",
+        "path": "dma_wave_top.tb.axi.rid",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "rdata",
+        "path": "dma_wave_top.tb.axi.rdata",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "rlast",
+        "path": "dma_wave_top.tb.axi.rlast",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "rresp",
+        "path": "dma_wave_top.tb.axi.rresp",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "wvalid",
+        "path": "dma_wave_top.tb.axi.wvalid",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "wready",
+        "path": "dma_wave_top.tb.axi.wready",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "wdata",
+        "path": "dma_wave_top.tb.axi.wdata",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "wstrb",
+        "path": "dma_wave_top.tb.axi.wstrb",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "wlast",
+        "path": "dma_wave_top.tb.axi.wlast",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "bvalid",
+        "path": "dma_wave_top.tb.axi.bvalid",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "bready",
+        "path": "dma_wave_top.tb.axi.bready",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "bresp",
+        "path": "dma_wave_top.tb.axi.bresp",
+        "reason": "interface inactive in this excerpt"
+      },
+      {
+        "name": "irq bitmap",
+        "path": "dma_wave_top.tb.ctrl.irq",
+        "reason": "constant; moved to context table"
+      },
+      {
+        "name": "debug KILL",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.dbg_kill",
+        "reason": "constant; moved to context table"
+      }
+    ],
+    "constant_context": [
+      {
+        "name": "reset_n",
+        "path": "dma_wave_top.tb.rst_n",
+        "value": "1"
+      },
+      {
+        "name": "ch0.PC",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.pc",
+        "value": "00010000"
+      },
+      {
+        "name": "opcode (when EXEC)",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.op",
+        "value": "MOV"
+      },
+      {
+        "name": "far",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.far",
+        "value": "00000000"
+      },
+      {
+        "name": "rd_err",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.rd_err",
+        "value": "0"
+      },
+      {
+        "name": "wr_err",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.wr_err",
+        "value": "0"
+      },
+      {
+        "name": "ftrd",
+        "path": "dma_wave_top.tb.u_dut.u_core.ftrd",
+        "value": "00000000"
+      },
+      {
+        "name": "mgr_faulting",
+        "path": "dma_wave_top.tb.u_dut.u_core.mgr_faulting",
+        "value": "0"
+      },
+      {
+        "name": "irq bitmap",
+        "path": "dma_wave_top.tb.ctrl.irq",
+        "value": "0000"
+      },
+      {
+        "name": "debug KILL",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.dbg_kill",
+        "value": "0"
+      }
+    ],
+    "value_labels": {},
+    "lanes": [
+      {
+        "name": "ch0.state (internal)",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.state",
+        "width": 4,
+        "samples": [
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "10",
+          "1000",
+          "1001",
+          "1001",
+          null,
+          "1001",
+          "1001"
+        ],
+        "gate": null
+      },
+      {
+        "name": "ch0.CSR status",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.csr[3:0]",
+        "width": 4,
+        "samples": [
+          "0010",
+          "0010",
+          "0010",
+          "0001",
+          "0001",
+          "0001",
+          "0001",
+          "1110",
+          "1111",
+          "1111",
+          null,
+          "1111",
+          "1111"
+        ],
+        "gate": null
+      },
+      {
+        "name": "ftr",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.ftr",
+        "width": 32,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "10000000",
+          "10000000",
+          "10000000",
+          null,
+          "10000000",
+          "10000000"
+        ],
+        "gate": null
+      },
+      {
+        "name": "dp_flush",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.dp_flush",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
+          "1",
+          null,
+          "1",
+          "1"
+        ],
+        "gate": null
+      },
+      {
+        "name": "irq_abort",
+        "path": "dma_wave_top.tb.ctrl.irq_abort",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
+          "1",
+          null,
+          "1",
+          "1"
+        ],
+        "gate": null
+      }
+    ],
+    "note": "Asynchronous pins are cycle snapshots; exact acceptance times are in the operation table and original VCD.",
+    "colors": {
+      "skin": "default",
+      "palette": {
+        "2": {
+          "name": "white",
+          "hex": "#ffffff"
+        },
+        "3": {
+          "name": "pale amber",
+          "hex": "#ffffb4"
+        },
+        "4": {
+          "name": "soft peach",
+          "hex": "#ffe0b9"
+        },
+        "5": {
+          "name": "pastel blue",
+          "hex": "#b9e0ff"
+        },
+        "6": {
+          "name": "pale cyan",
+          "hex": "#ccfdfe"
+        },
+        "7": {
+          "name": "soft green",
+          "hex": "#cdfdc5"
+        },
+        "8": {
+          "name": "light lavender",
+          "hex": "#f0c1fb"
+        },
+        "9": {
+          "name": "soft rose",
+          "hex": "#f5c2c0"
+        }
+      },
+      "state_symbols": {
+        "0": "2",
+        "1": "5",
+        "2": "7",
+        "3": "3",
+        "4": "3",
+        "5": "4",
+        "6": "6",
+        "7": "8",
+        "8": "9",
+        "9": "9",
+        "10": "8",
+        "11": "4"
+      },
+      "data_symbols": [],
+      "meaning": "State colors indicate state categories; data colors identify values within one figure. Labels remain authoritative; colors repeat after six distinct data values.",
+      "references": [
+        "https://wavedrom.com/tutorial.html",
+        "https://github.com/wavedrom/wavedrom/blob/trunk/skins/default.js"
+      ]
+    },
+    "source_run": "spec_ccr_security",
+    "operation": "24_ccr_permissions",
+    "number": 1,
+    "source_window_ns": [
+      312.5,
+      462.5
+    ],
+    "source_vcd_sha256": "36a2876b670b55c1471fe0058af3ec23cdcbc1a11bd2ad505722ff30629b0fea"
+  }
+}

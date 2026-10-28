@@ -186,7 +186,9 @@ module sva_channel
   input logic faulting,
   input logic [3:0] status,
   input logic dp_idle,
-  input logic ic_inv_req
+  input logic ic_inv_req,
+  input logic ic_refill,
+  input logic [31:0] cpc
 );
   default clocking cb @(posedge clk); endclocking
   default disable iff (!rst_n);
@@ -194,6 +196,12 @@ module sva_channel
   CH_ONE_REQ:          assert property (!(ld_valid && st_valid));
   CH_NO_REQ_FLUSHING:  assert property ((ld_valid || st_valid) |-> !dp_flush);
   CH_FAULT_FLUSHES:    assert property (faulting |-> dp_flush);
+  CH_MISS_REQUIRES_REFILL: assert property (status == ST_CACHE_MISS |-> ic_refill);
+  CH_UPDATE_NO_REISSUE: assert property (
+      status == ST_UPDATING_PC |-> !(ld_valid || st_valid || sev_valid));
+  CH_PC_COMMIT_PHASE: assert property (
+      $past(rst_n) && $changed(cpc) |-> $past(status inside {ST_STOPPED, ST_UPDATING_PC}));
+  CH_C_UPDATE_PC: cover property (status == ST_UPDATING_PC);
   CH_END_KILL_INVALIDATE: assert property (
       (status inside {ST_COMPLETING, ST_KILLING}) && dp_idle |-> ic_inv_req);
   CH_C_END_INVALIDATE: cover property (status == ST_COMPLETING && dp_idle && ic_inv_req);
@@ -225,10 +233,17 @@ module sva_manager_cache
 (
   input logic clk, rst_n, in_exec_ok, ic_inv_req, faulting, dbg_valid,
   input insn_e cls,
-  input logic [INSN_W-1:0] dbg_insn
+  input logic [INSN_W-1:0] dbg_insn,
+  input logic [3:0] status,
+  input logic ic_refill,
+  input logic [31:0] dpc
 );
   default clocking cb @(posedge clk); endclocking
   default disable iff (!rst_n);
+  MGR_MISS_REQUIRES_REFILL: assert property (status == ST_CACHE_MISS |-> ic_refill);
+  MGR_PC_COMMIT_PHASE: assert property (
+      $past(rst_n) && $changed(dpc) |-> $past(status inside {ST_STOPPED, ST_UPDATING_PC}));
+  MGR_C_UPDATE_PC: cover property (status == ST_UPDATING_PC);
   MGR_END_KILL_INVALIDATE: assert property (
       in_exec_ok && (cls inside {I_END, I_KILL}) |-> ic_inv_req);
   MGR_FAULT_KILL_INVALIDATE: assert property (
@@ -241,16 +256,18 @@ endmodule
 // Write engine: W data never goes out without a selected burst, and only the
 // bytes present in the MFIFO are popped (checked in sva_mfifo).
 //------------------------------------------------------------------------------
-module sva_wr_engine (
+module sva_wr_engine #(parameter int NUM_CH=4) (
   input logic clk,
   input logic rst_n,
   input logic m_wvalid,
   input logic m_awvalid,
-  input logic act_valid
+  input logic act_valid,
+  input logic [$clog2(NUM_CH>1 ? NUM_CH : 2)-1:0] aw_ch,
+  input logic [NUM_CH-1:0] btrk_empty
 );
   default clocking cb @(posedge clk); endclocking
   default disable iff (!rst_n);
 
   WR_W_NEEDS_BURST:  assert property (m_wvalid  |-> act_valid);
-  WR_AW_NEEDS_BURST: assert property (m_awvalid |-> act_valid);
+  WR_AW_NEEDS_BURST: assert property (m_awvalid |-> !btrk_empty[aw_ch]);
 endmodule

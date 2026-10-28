@@ -1,12 +1,19 @@
 # AXI DMA Controller `axi_dma330` — Verification Plan
 
+> Cập nhật conformance v1.7: xem [RTL_SPEC_FIXES.md](RTL_SPEC_FIXES.md).
+> Validation hiện tại: 150/150 UVM, 15/15 unit, 10/10 unit mutation detected,
+> 84/84 TRM probes trên full core 32/64/128 bit và 2/2 CR1 guard checks.
+> Các bảng coverage/mutation cũ phía dưới là lịch sử; đặc biệt các kỳ vọng
+> debug bank riêng và lọc thêm CR3/CNS cho control registers khi DNS=1 không
+> còn là contract hiện tại. Chưa chạy lại code-coverage/sign-off sau v1.7.
+
 | Mục | Giá trị |
 |---|---|
 | DUT | `axi_dma330` (RTL trong `rtl/`) |
 | Phương pháp | UVM-1.2, constrained-random + directed, coverage-driven, SVA, reference model |
 | Simulator | QuestaSim 10.7c (UVM-1.2 precompiled) |
 | Tài liệu liên quan | [DESIGN_SPEC.md](DESIGN_SPEC.md) (đặc tả), [TESTCASES.md](TESTCASES.md) (chi tiết từng test), [CMODEL.md](CMODEL.md) (C model qua DPI-C) |
-| Phiên bản | 1.5 (test cache coherency theo thread, unit RTL và mutation cache/write). 1.4 (kiểm chứng các bản sửa theo TRM DMA-330 r1p2: lệnh `S` một beat, `DMAWFP S/B`, tách 4 KB, load-lock + lock-up chính xác, barrier `DMAFLUSHP`, `CCR` của kênh NS, tag NS của I-cache, mã lỗi, thuộc tính AXI, EXOKAY, `PERIPH_ID`, reset `CCR`, debug khi manager chờ, reset CDC từng domain). 1.3: MFIFO dùng chung, security. 1.2: C reference model qua DPI-C và chương trình ngẫu nhiên cấp ISA. 1.1: bảo vệ AXI, endian swap, watchdog, FAR, Q-Channel, PSLVERR |
+| Phiên bản | 1.6 (kiểm tra Updating PC, refill thật theo thread và PC sequence). 1.5 (test cache coherency theo thread, unit RTL và mutation cache/write). 1.4 (kiểm chứng các bản sửa theo TRM DMA-330 r1p2: lệnh `S` một beat, `DMAWFP S/B`, tách 4 KB, load-lock + lock-up chính xác, barrier `DMAFLUSHP`, `CCR` của kênh NS, tag NS của I-cache, mã lỗi, thuộc tính AXI, EXOKAY, `PERIPH_ID`, reset `CCR`, debug khi manager chờ, reset CDC từng domain). 1.3: MFIFO dùng chung, security. 1.2: C reference model qua DPI-C và chương trình ngẫu nhiên cấp ISA. 1.1: bảo vệ AXI, endian swap, watchdog, FAR, Q-Channel, PSLVERR |
 
 ---
 
@@ -516,6 +523,8 @@ python run_regression.py -t dma_stress_test -c async --seeds 10 -j 16
 | 8 | Mutation testing: mọi lỗi cấy vào RTL bị phát hiện | 100 % |
 
 ### 9.2 Kết quả
+
+**Sửa trạng thái thread, 2026-10-28:** bổ sung `Updating PC` (mã 3) cho manager/channel và chỉ báo `Cache miss` (mã 2) khi có refill thật của thread. Regression với coverage: 150/150 PASS (25 test × sync/async × seed 1–3, 4 jobs, 303 s); unit 11/11 PASS; mutation 10/10 bị phát hiện; 179 assertion không lỗi. Mọi cover point Updating PC đều được hit. Coverage theo file: statement 99.90%, branch 99.41%, FSM state/transition 100%/100%, FEC condition 89.36%. Xem [THREAD_STATUS_FIXES.md](THREAD_STATUS_FIXES.md) để biết phạm vi và số liệu chi tiết; các bảng bên dưới là kết quả lịch sử.
 
 **Bản sửa `Codex_rtl`, 2026-10-27:** 150/150 lượt UVM PASS (25 test × sync/async × seed 1–3), C model 173/173 kiểm tra PASS. Thêm `dma_cache_test`, 9 cấu hình unit RTL và kiểm tra 5 mutation cache/fetch/write. Các assertion mới kiểm tra invalidate khi END/KILL ở manager và channel. Xem [RTL_REVIEW_FIXES.md](RTL_REVIEW_FIXES.md) để biết lệnh chạy, phạm vi tham số và giới hạn xác nhận.
 

@@ -4,9 +4,6 @@
 [Guide index](README.md) · [Background](00_background.md) · [← Previous: 4. Copy between different byte alignments](04_unaligned.md) · [Next: 6. Use a fixed source or a fixed destination →](06_fixed.md)
 <!-- /reading-nav -->
 
-
-
-
 ## Purpose
 
 Distinguish one DMA instruction from the two AXI transactions it generates.
@@ -42,18 +39,18 @@ Group brackets separate the thread, shared storage and active interfaces. Inacti
 
 [Open SVG at full size](../svg/05_boundary_1.svg) | [WaveDrom JSON](../wavejson/05_boundary_1.json)
 
-Source: `direct_read4k`. Core/unit cycle snapshots cover the selected **387.5..527.5 ns** interval. The first cell's right sampling edge is **387.5 ns**.
+Source: `direct_read4k`. Core/unit cycle snapshots cover the selected **392.5..532.5 ns** interval. The first cell's right sampling edge is **392.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
-| 407.5 | AR accepted | ID=0; address=0x10000ff8; 1 beats x 8 B; INCR |
-| 412.5 | AR accepted | ID=0; address=0x10001000; 3 beats x 8 B; INCR |
+| 412.5 | AR accepted | ID=0; address=0x10000ff8; 1 beats x 8 B; INCR |
+| 417.5 | AR accepted | ID=0; address=0x10001000; 3 beats x 8 B; INCR |
 | 417.5 | RLAST accepted | RESP=0 |
-| 432.5 | RLAST accepted | RESP=0 |
-| 442.5 | AW accepted | ID=0; address=0x20000000; 4 beats x 8 B; INCR |
-| 457.5 | WLAST accepted | WSTRB=0xff |
-| 467.5 | B response accepted | RESP=0 |
-| 487.5 | IRQ bitmap | 0x1 |
+| 437.5 | RLAST accepted | RESP=0 |
+| 447.5 | AW accepted | ID=0; address=0x20000000; 4 beats x 8 B; INCR |
+| 467.5 | WLAST accepted | WSTRB=0xff |
+| 477.5 | B response accepted | RESP=0 |
+| 497.5 | IRQ bitmap | 0x1 |
 
 Full values for the short labels in this picture (matching D labels mean matching data):
 
@@ -75,19 +72,19 @@ Useful constant context: `AR.ready=1 (no back-pressure)`; `AW.ready=1 (no back-p
 
 [Open SVG at full size](../svg/05_boundary_2.svg) | [WaveDrom JSON](../wavejson/05_boundary_2.json)
 
-Source: `direct_write4k`. Core/unit cycle snapshots cover the selected **387.5..527.5 ns** interval. The first cell's right sampling edge is **387.5 ns**.
+Source: `direct_write4k`. Core/unit cycle snapshots cover the selected **392.5..532.5 ns** interval. The first cell's right sampling edge is **392.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
-| 407.5 | AR accepted | ID=0; address=0x10000000; 4 beats x 8 B; INCR |
+| 412.5 | AR accepted | ID=0; address=0x10000000; 4 beats x 8 B; INCR |
+| 427.5 | AW accepted | ID=0; address=0x20000ff8; 1 beats x 8 B; INCR |
 | 432.5 | RLAST accepted | RESP=0 |
-| 437.5 | AW accepted | ID=0; address=0x20000ff8; 1 beats x 8 B; INCR |
-| 437.5 | WLAST accepted | WSTRB=0xff |
+| 432.5 | WLAST accepted | WSTRB=0xff |
+| 437.5 | B response accepted | RESP=0 |
 | 442.5 | AW accepted | ID=0; address=0x20001000; 3 beats x 8 B; INCR |
-| 447.5 | B response accepted | RESP=0 |
-| 452.5 | WLAST accepted | WSTRB=0xff |
-| 457.5 | B response accepted | RESP=0 |
-| 477.5 | IRQ bitmap | 0x1 |
+| 457.5 | WLAST accepted | WSTRB=0xff |
+| 467.5 | B response accepted | RESP=0 |
+| 487.5 | IRQ bitmap | 0x1 |
 
 Full values for the short labels in this picture (matching D labels mean matching data):
 

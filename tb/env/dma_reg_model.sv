@@ -84,10 +84,10 @@ class dma_reg_dbginst0 extends uvm_reg;
     channel      = uvm_reg_field::type_id::create("channel");
     instr_byte0  = uvm_reg_field::type_id::create("instr_byte0");
     instr_byte1  = uvm_reg_field::type_id::create("instr_byte1");
-    debug_thread.configure(this, 1, 0,  "RW", 0, 0, 1, 1, 0);
-    channel.configure     (this, 3, 8,  "RW", 0, 0, 1, 1, 0);
-    instr_byte0.configure (this, 8, 16, "RW", 0, 0, 1, 1, 0);
-    instr_byte1.configure (this, 8, 24, "RW", 0, 0, 1, 1, 0);
+    debug_thread.configure(this, 1, 0,  "WO", 0, 0, 1, 1, 0);
+    channel.configure     (this, 3, 8,  "WO", 0, 0, 1, 1, 0);
+    instr_byte0.configure (this, 8, 16, "WO", 0, 0, 1, 1, 0);
+    instr_byte1.configure (this, 8, 24, "WO", 0, 0, 1, 1, 0);
   endfunction
 endclass
 
@@ -206,8 +206,8 @@ class dma_reg_block extends uvm_reg_block;
     DBGINST0  = dma_reg_dbginst0::type_id::create("DBGINST0");
     DBGINST0.configure(this);
     DBGINST0.build();
-    default_map.add_reg(DBGINST0, 'hD08, "RW");
-    DBGINST1  = add32("DBGINST1",  'hD0C, "RW");
+    default_map.add_reg(DBGINST0, 'hD08, "WO");
+    DBGINST1  = add32("DBGINST1",  'hD0C, "WO");
 
     CR0 = add32("CR0", 'hE00, "RO", cr0);
     CR1 = add32("CR1", 'hE04, "RO", cr1);

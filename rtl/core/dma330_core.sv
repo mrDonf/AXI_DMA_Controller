@@ -137,6 +137,7 @@ module dma330_core
   //============================================================================
   // Instruction cache
   logic [NUM_THREADS-1:0] ic_req, ic_ns, ic_inv_req, ic_resp_valid;
+  logic [NUM_THREADS-1:0] ic_refill;
   logic [ADDR_W-1:0]      ic_addr [NUM_THREADS];
   logic [LINE_W-1:0]      ic_resp_data;
   logic                   ic_resp_err, ic_resp_retry;
@@ -179,7 +180,8 @@ module dma330_core
   logic [NUM_CH-1:0]      st_valid, st_ready, st_short;
   xfer_t                  ld_xfer [NUM_CH];
   xfer_t                  st_xfer [NUM_CH];
-  logic [NUM_CH-1:0]      ch_flush, rd_busy, wr_busy, rd_err, wr_err;
+  logic [NUM_CH-1:0]      ch_flush, rd_busy, wr_busy, wr_beat, rd_err, wr_err;
+  logic [NUM_CH-1:0]      ch_running;
 
   // Status
   logic [31:0]            dsr, dpc, ftrd;
@@ -316,6 +318,7 @@ module dma330_core
     .ic_resp_data    (ic_resp_data),
     .ic_resp_err     (ic_resp_err),
     .ic_resp_retry   (ic_resp_retry),
+    .ic_refill       (ic_refill[MGR]),
     .go_valid        (go_valid),
     .go_pc           (go_pc),
     .go_ns           (go_ns),
@@ -368,6 +371,7 @@ module dma330_core
       .ic_resp_data  (ic_resp_data),
       .ic_resp_err   (ic_resp_err),
       .ic_resp_retry (ic_resp_retry),
+      .ic_refill     (ic_refill[ch]),
       .sev_valid     (sev_valid[ch]),
       .sev_event     (sev_event[ch]),
       .wfe_valid     (wfe_valid[ch]),
@@ -433,6 +437,7 @@ module dma330_core
     .resp_data  (ic_resp_data),
     .resp_err   (ic_resp_err),
     .resp_retry (ic_resp_retry),
+    .refill_pending (ic_refill),
     .ar_valid   (icr_ar_valid),
     .ar_ready   (icr_ar_ready),
     .ar_addr    (icr_ar_addr),
@@ -548,8 +553,10 @@ module dma330_core
     .st_ready      (st_ready),
     .st_short      (st_short),
     .ch_flush      (ch_flush),
+    .ch_running    (ch_running),
     .rd_busy       (rd_busy),
     .wr_busy       (wr_busy),
+    .wr_beat       (wr_beat),
     .rd_err        (rd_err),
     .wr_err        (wr_err),
     .rd_err_addr   (rd_err_addr),
@@ -619,6 +626,7 @@ module dma330_core
     logic        axi_hs;
 
     assign st = ch_csr[ch][3:0];
+    assign ch_running[ch] = !(st inside {ST_STOPPED, ST_FAULTING, ST_FAULT_COMPLETING, ST_KILLING});
     assign id = ID_W'(ch);
 
     // Legitimate unbounded waits (event / peripheral) and stopped / faulting
@@ -629,7 +637,7 @@ module dma330_core
     assign axi_hs = (m_arvalid && m_arready && m_arid == id) ||
                     (m_rvalid  && m_rready  && m_rid  == id) ||
                     (m_awvalid && m_awready && m_awid == id) ||
-                    (m_wvalid  && m_wready  && m_awid == id) ||   // AWID = active W burst
+                    wr_beat[ch] ||
                     (m_bvalid  && m_bready  && m_bid  == id);
 
     always_ff @(posedge clk or negedge rst_n) begin
@@ -710,8 +718,9 @@ module dma330_core
       $fatal(1, "dma330_core: ID_W too small (needs channel IDs + IFETCH ID)");
     if (MFIFO_LINES < 32 || MFIFO_LINES > 1024)
       $fatal(1, "dma330_core: MFIFO_LINES must be 32..1024 (two max-length bursts, CRD field)");
-    if ((IC_BEATS & (IC_BEATS - 1)) != 0 || IC_BEATS * DATA_W / 8 < 8 || IC_LINES < 1 || IC_LINES > 16)
-      $fatal(1, "dma330_core: IC_BEATS must be a power of two (line >= 8 bytes), IC_LINES 1..16");
+    if ((IC_BEATS & (IC_BEATS - 1)) != 0 || IC_BEATS * DATA_W / 8 < 4 ||
+        IC_BEATS * DATA_W / 8 > 32 || IC_LINES < 1 || IC_LINES > 16)
+      $fatal(1, "dma330_core: cache line must be 4/8/16/32 bytes (TRM CR1), IC_LINES 1..16");
     if (RQ_DEPTH > 16 || WQ_DEPTH > 16 || RD_OUT > 8 || WR_OUT > 8)
       $fatal(1, "dma330_core: RQ/WQ_DEPTH must be <= 16, RD/WR_OUT <= 8 (CRD fields)");
   end

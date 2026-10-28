@@ -8,19 +8,18 @@
 // asynchronously; the thread only waits where the ISA requires it
 // (barriers, DMAEND, events, peripherals) or when a queue is full.
 //
-//   STOPPED --DMAGO--> FETCH <--> EXEC --+--> WFE        (DMAWFE)
-//                        ^               +--> WFP        (DMAWFP)
-//                        |               +--> BARRIER    (DMARMB/DMAWMB/DMAFLUSHP)
-//                        +---------------+--> COMPLETING (DMAEND) --> STOPPED
-//                                        +--> KILLING    (DMAKILL) -> STOPPED
+//   STOPPED --DMAGO--> FETCH --> EXEC --> UPDATING_PC --> FETCH
+//   EXEC --> WFE / WFP / BARRIER --wake/complete--> UPDATING_PC
+//   EXEC --> COMPLETING (DMAEND) --> STOPPED
+//   EXEC --> KILLING (DMAKILL) --> STOPPED
 //   any error ------------> FAULT_COMPLETING --> FAULTING --dbg DMAKILL--> KILLING
 //
 // Security: a non-secure thread (DMAGO ns = 1) may only use the events and
 // peripherals that are non-secure in CR3 / CR4 (boot_irq_ns / boot_periph_ns).
 // DMASEV / DMAWFE of a secure event faults with ch_evnt_err; DMAWFP,
 // DMAFLUSHP, DMALDP, DMASTP of a secure peripheral with ch_periph_err. Its
-// DMALD / DMAST fault with ch_rdwr_err when CCR asks for a secure access
-// (src/dst_prot[1] = 0). An event or peripheral number the configuration
+// DMAMOV CCR faults with ch_rdwr_err when its immediate asks for a secure
+// access (src/dst_prot[1] = 0). An event or peripheral number the configuration
 // does not have is an invalid operand (operand_invalid).
 //
 // Bursts: DMALD/DMAST S and DMALDPS/DMASTPS move one beat (AxLEN = 0, the
@@ -79,6 +78,7 @@ module dma_channel
   input  logic [LINE_BYTES*8-1:0] ic_resp_data,
   input  logic                    ic_resp_err,
   input  logic                    ic_resp_retry,
+  input  logic                    ic_refill,
 
   // Events
   output logic                    sev_valid,
@@ -135,7 +135,8 @@ module dma_channel
 
   typedef enum logic [3:0] {
     C_STOPPED, C_FETCH, C_EXEC, C_WFE, C_WFP, C_BARRIER,
-    C_COMPLETING, C_KILLING, C_FAULT_COMPLETING, C_FAULTING
+    C_COMPLETING, C_KILLING, C_FAULT_COMPLETING, C_FAULTING, C_UPDATING_PC,
+    C_RECONFIG
   } cstate_e;
 
   //============================================================================
@@ -150,31 +151,36 @@ module dma_channel
   logic              req_last;     // peripheral signalled its last request
   logic [4:0]        wake_num;     // event / peripheral being waited for
   logic              barrier_wr;   // 1: DMAWMB, 0: DMARMB
+  logic              reconfig_dst;
   logic              barrier_fl;   // DMAFLUSHP: wait for reads and writes
   logic [4:0]        flush_num;    // peripheral of the pending DMAFLUSHP
   logic              wfp_is_burst, wfp_is_periph;
   logic              far_valid;    // FAR holds an error address
   logic              wd_can_fault; // states in which a watchdog lock-up aborts
+  logic              pc_branch;    // selected by EXEC, applied in UPDATING_PC
 
   //============================================================================
   // Instruction fetch
   //============================================================================
-  logic              fetch_req, insn_valid, fetch_err, fetch_miss;
+  logic              fetch_req, insn_valid, fetch_err;
   logic [INSN_W-1:0] insn;
+  logic [ADDR_W-1:0] fetch_pc;
 
-  assign fetch_req = (state == C_FETCH);
+  // Start the cache access while calculating/committing its PC. This exposes
+  // Updating PC without adding an idle cycle to the instruction pipeline.
+  assign fetch_req = (state == C_FETCH) || (state == C_UPDATING_PC);
   assign ic_ns     = ns;
 
   dma_fetch_unit #(.LINE_BYTES(LINE_BYTES)) u_fetch (
     .clk           (clk),
     .rst_n         (rst_n),
     .fetch_req     (fetch_req),
-    .pc            (pc),
+    .pc            (fetch_pc),
     .inv           (ic_inv),
     .insn_valid    (insn_valid),
     .insn          (insn),
     .fetch_err     (fetch_err),
-    .miss          (fetch_miss),
+    .miss          (), // front-end pending is not architectural Cache miss
     .ic_req        (ic_req),
     .ic_addr       (ic_addr),
     .ic_resp_valid (ic_resp_valid),
@@ -201,7 +207,25 @@ module dma_channel
   assign num5    = b1[7:3];
   assign cls     = decode_op(op);
   assign pc_next = pc + ADDR_W'(insn_len(op));
+  assign fetch_pc = (state == C_UPDATING_PC) ?
+                    (pc_branch ? pc - ADDR_W'(b1) : pc_next) : pc;
   assign cond_ok = !op[0] || (op[1] == req_burst);
+
+  // TRM 2.11.3: commit a discontinuous MOV only after its implicit barrier.
+  // Destination discontinuities also discard the old, destination-formatted
+  // stream. Burst length alone and incrementing destination size do not do so.
+  ccr_t mov_ccr;
+  logic mov_src_disc, mov_dst_disc;
+  assign mov_ccr = ccr_t'(imm32);
+  assign mov_src_disc = cls == I_MOV &&
+      ((b1 == 0 && sar[MAX_SIZE-1:0] != imm32[MAX_SIZE-1:0]) ||
+       (b1 == 1 && (ccr.src_inc != mov_ccr.src_inc ||
+                    ccr.src_burst_size != mov_ccr.src_burst_size)));
+  assign mov_dst_disc = cls == I_MOV &&
+      ((b1 == 2 && dar[MAX_SIZE-1:0] != imm32[MAX_SIZE-1:0]) ||
+       (b1 == 1 && (ccr.endian_swap != mov_ccr.endian_swap ||
+                    ccr.dst_inc != mov_ccr.dst_inc ||
+                    (!ccr.dst_inc && ccr.dst_burst_size != mov_ccr.dst_burst_size))));
 
   // DMALD/DMAST with the S suffix and DMALDPS/DMASTPS (op[1:0] = 01) move a
   // single beat: the CCR burst length is ignored (TRM 2.6.4, 4.3.7, 4.3.16)
@@ -242,8 +266,7 @@ module dma_channel
   end
 
   // Store-side endian swap legality (TRM 2.11.2). Swap groups of g bytes:
-  //   * g must fit in one data-bus word (configuration limit) and DAR must be
-  //     aligned to g
+  //   * g <= 16 and DAR is aligned to g; groups wider than the bus are staged
   //   * INCR : the burst must hold whole groups (len x size multiple of g); a
   //     group may then span several beats narrower than g
   //   * FIXED: every beat must hold whole groups (dst_burst_size >= swap)
@@ -256,7 +279,6 @@ module dma_channel
     swap_bad = 1'b0;
     if (ccr.endian_swap != 3'd0 && cls != I_STZ) begin
       swap_bad = (ccr.endian_swap > 3'd4) ||
-                 (ccr.endian_swap > MAX_SIZE) ||
                  ((dar[3:0] & swap_mask) != 4'd0) ||
                  (ccr.dst_inc ? ((st_xfer.bytes[3:0] & swap_mask) != 4'd0)
                               : (ccr.endian_swap > ccr.dst_burst_size));
@@ -292,8 +314,11 @@ module dma_channel
     case (cls)
       I_UNDEF, I_GO:
         exec_fault_base[FTC_UNDEF_INSTR] = 1'b1;
-      I_MOV:
+      I_MOV: begin
         exec_fault_base[FTC_OPERAND_INVALID] = (b1 > 8'd2);
+        exec_fault_base[FTC_CH_RDWR_ERR] = b1 == 1 && ns &&
+                                          (!mov_ccr.src_prot[1] || !mov_ccr.dst_prot[1]);
+      end
       I_SEV, I_WFE: begin
         exec_fault_base[FTC_OPERAND_INVALID] = ev_range_bad;
         exec_fault_base[FTC_CH_EVNT_ERR]     = ev_sec_bad;
@@ -355,7 +380,8 @@ module dma_channel
   assign wfp_kind     = {wfp_is_burst, wfp_is_periph};
 
   assign dp_flush     = (state == C_STOPPED)          || (state == C_KILLING) ||
-                        (state == C_FAULT_COMPLETING) || (state == C_FAULTING);
+                        (state == C_FAULT_COMPLETING) || (state == C_FAULTING) ||
+                        (state == C_RECONFIG && reconfig_dst && dp_idle);
 
   assign dp_idle = !rd_busy && !wr_busy;
 
@@ -366,8 +392,9 @@ module dma_channel
 
   // Load-lock release: DMAST*, barriers, waits, DMAEND, DMAKILL, any abort
   assign ll_release   = dp_flush ||
-                        (in_exec_ok && (cls inside {I_ST, I_STP, I_STZ, I_RMB, I_WMB, I_FLUSHP,
-                                                    I_WFP, I_WFE, I_END, I_KILL}));
+                        (in_exec_ok &&
+                         ((is_store && cond_ok) || mov_src_disc || mov_dst_disc ||
+                          (cls inside {I_RMB, I_WMB, I_FLUSHP, I_WFP, I_WFE, I_END, I_KILL})));
 
   //============================================================================
   // Thread state machine
@@ -375,8 +402,9 @@ module dma_channel
 
   // A watchdog lock-up aborts a running program; a channel that is already
   // being killed or faulted is only reported (WDSTAT)
-  assign wd_can_fault = (state == C_FETCH) || (state == C_EXEC) || (state == C_WFE) ||
-                        (state == C_WFP) || (state == C_BARRIER) || (state == C_COMPLETING);
+  assign wd_can_fault = (state == C_FETCH) || (state == C_EXEC) || (state == C_UPDATING_PC) || (state == C_WFE) ||
+                        (state == C_WFP) || (state == C_BARRIER) || (state == C_RECONFIG) ||
+                        (state == C_COMPLETING);
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -392,6 +420,7 @@ module dma_channel
       req_last      <= 1'b0;
       wake_num      <= '0;
       barrier_wr    <= 1'b0;
+      reconfig_dst  <= 1'b0;
       barrier_fl    <= 1'b0;
       flush_num     <= '0;
       wfp_is_burst  <= 1'b0;
@@ -399,6 +428,7 @@ module dma_channel
       ftr           <= '0;
       far           <= '0;
       far_valid     <= 1'b0;
+      pc_branch     <= 1'b0;
     end else begin
       case (state)
         //----------------------------------------------------------------------
@@ -411,6 +441,7 @@ module dma_channel
             ftr       <= '0;
             far       <= '0;
             far_valid <= 1'b0;
+            pc_branch <= 1'b0;
             state     <= C_FETCH;
           end
         end
@@ -428,6 +459,7 @@ module dma_channel
 
         //----------------------------------------------------------------------
         C_EXEC: begin
+          pc_branch <= 1'b0;
           if (exec_fault != '0) begin
             ftr   <= ftr | exec_fault;
             state <= C_FAULT_COMPLETING;
@@ -437,8 +469,7 @@ module dma_channel
               I_KILL: state <= C_KILLING;
 
               I_NOP, I_SEV: begin
-                pc    <= pc_next;
-                state <= C_FETCH;
+                state <= C_UPDATING_PC;
               end
 
               I_RMB, I_WMB: begin
@@ -449,47 +480,38 @@ module dma_channel
 
               I_LD, I_LDP: begin
                 if (!cond_ok) begin
-                  pc    <= pc_next;                 // condition false: NOP
-                  state <= C_FETCH;
+                  state <= C_UPDATING_PC;           // condition false: NOP
                 end else if (ld_ready) begin
                   if (ccr.src_inc) sar <= sar + ADDR_W'(ld_xfer.bytes);
-                  pc    <= pc_next;
-                  state <= C_FETCH;
+                  state <= C_UPDATING_PC;
                 end
               end
 
               I_ST, I_STP, I_STZ: begin
                 if (!cond_ok) begin
-                  pc    <= pc_next;
-                  state <= C_FETCH;
+                  state <= C_UPDATING_PC;
                 end else if (st_ready) begin
                   if (ccr.dst_inc) dar <= dar + ADDR_W'(st_xfer.bytes);
-                  pc    <= pc_next;
-                  state <= C_FETCH;
+                  state <= C_UPDATING_PC;
                 end
               end
 
               I_LP: begin
                 if (op[1]) lc1 <= b1;
                 else       lc0 <= b1;
-                pc    <= pc_next;
-                state <= C_FETCH;
+                state <= C_UPDATING_PC;
               end
 
               I_LPEND: begin
-                state <= C_FETCH;
-                if (!cond_ok) begin
-                  pc <= pc_next;
-                end else if (op[4]) begin           // finite loop (DMALPEND)
+                state <= C_UPDATING_PC;
+                if (cond_ok && op[4]) begin         // finite loop (DMALPEND)
                   if (op[2]) begin
-                    if (lc1 != 8'd0) begin lc1 <= lc1 - 8'd1; pc <= pc - ADDR_W'(b1); end
-                    else             pc  <= pc_next;
+                    if (lc1 != 8'd0) begin lc1 <= lc1 - 8'd1; pc_branch <= 1'b1; end
                   end else begin
-                    if (lc0 != 8'd0) begin lc0 <= lc0 - 8'd1; pc <= pc - ADDR_W'(b1); end
-                    else             pc  <= pc_next;
+                    if (lc0 != 8'd0) begin lc0 <= lc0 - 8'd1; pc_branch <= 1'b1; end
                   end
-                end else begin                      // forever loop (DMALPFE)
-                  pc <= req_last ? pc_next : pc - ADDR_W'(b1);
+                end else if (cond_ok) begin         // forever loop (DMALPFE)
+                  pc_branch <= !req_last;
                 end
               end
 
@@ -514,18 +536,21 @@ module dma_channel
               I_ADDH, I_ADNH: begin
                 if (op[1]) dar <= dar + {(cls == I_ADNH) ? 16'hFFFF : 16'h0000, imm16};
                 else       sar <= sar + {(cls == I_ADNH) ? 16'hFFFF : 16'h0000, imm16};
-                pc    <= pc_next;
-                state <= C_FETCH;
+                state <= C_UPDATING_PC;
               end
 
               I_MOV: begin
-                case (b1[1:0])
-                  2'd0:    sar <= imm32;
-                  2'd1:    ccr <= ccr_t'(imm32);
-                  default: dar <= imm32;
-                endcase
-                pc    <= pc_next;
-                state <= C_FETCH;
+                if (mov_src_disc || mov_dst_disc) begin
+                  reconfig_dst <= mov_dst_disc;
+                  state <= C_RECONFIG;
+                end else begin
+                  case (b1[1:0])
+                    2'd0:    sar <= imm32;
+                    2'd1:    ccr <= mov_ccr;
+                    default: dar <= imm32;
+                  endcase
+                  state <= C_UPDATING_PC;
+                end
               end
 
               default: ;   // I_UNDEF / I_GO are caught by exec_fault
@@ -534,10 +559,17 @@ module dma_channel
         end
 
         //----------------------------------------------------------------------
+        // PC arithmetic and commit occur in their own architectural state
+        // (TRM 2.3.4). No instruction is reissued during this phase.
+        C_UPDATING_PC: begin
+          pc        <= pc_branch ? pc - ADDR_W'(b1) : pc_next;
+          pc_branch <= 1'b0;
+          state     <= C_FETCH;
+        end
+
         C_WFE: begin
           if (wfe_hit) begin
-            pc    <= pc_next;
-            state <= C_FETCH;
+            state <= C_UPDATING_PC;
           end
         end
 
@@ -545,8 +577,7 @@ module dma_channel
           if (wfp_gnt) begin
             req_burst <= wfp_is_periph ? wfp_burst : wfp_is_burst;
             req_last  <= wfp_is_periph && wfp_last;
-            pc        <= pc_next;
-            state     <= C_FETCH;
+            state     <= C_UPDATING_PC;
           end
         end
 
@@ -556,12 +587,21 @@ module dma_channel
               req_burst  <= 1'b0;
               req_last   <= 1'b0;
               barrier_fl <= 1'b0;
-              pc         <= pc_next;
-              state      <= C_FETCH;
+              state      <= C_UPDATING_PC;
             end
           end else if (barrier_wr ? !wr_busy : !rd_busy) begin
-            pc    <= pc_next;
-            state <= C_FETCH;
+            state <= C_UPDATING_PC;
+          end
+        end
+
+        C_RECONFIG: begin
+          if (reconfig_dst ? dp_idle : !rd_busy) begin
+            case (b1[1:0])
+              2'd0:    sar <= imm32;
+              2'd1:    ccr <= mov_ccr;
+              default: dar <= imm32;
+            endcase
+            state <= C_UPDATING_PC;
           end
         end
 
@@ -621,11 +661,13 @@ module dma_channel
   always_comb begin
     case (state)
       C_STOPPED:          status = ST_STOPPED;
-      C_FETCH:            status = fetch_miss ? ST_CACHE_MISS : ST_EXECUTING;
+      C_FETCH:            status = ic_refill ? ST_CACHE_MISS : ST_EXECUTING;
       C_EXEC:             status = ST_EXECUTING;
+      C_UPDATING_PC:      status = ST_UPDATING_PC;
       C_WFE:              status = ST_WAIT_EVENT;
       C_WFP:              status = ST_WAIT_PERIPH;
       C_BARRIER:          status = ST_AT_BARRIER;
+      C_RECONFIG:         status = ST_AT_BARRIER;
       C_COMPLETING:       status = ST_COMPLETING;
       C_KILLING:          status = ST_KILLING;
       C_FAULT_COMPLETING: status = ST_FAULT_COMPLETING;

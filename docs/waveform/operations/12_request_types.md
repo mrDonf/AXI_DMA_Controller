@@ -4,9 +4,6 @@
 [Guide index](README.md) · [Background](00_background.md) · [← Previous: 11. Service a peripheral-to-memory request](11_p2m.md) · [Next: 13. Synchronize a channel using a sticky event →](13_events.md)
 <!-- /reading-nav -->
 
-
-
-
 ## Purpose
 
 Explain conditional S/B instructions using the latched peripheral request flags.
@@ -54,11 +51,11 @@ Source: `direct_periph_mixed`. Core/unit cycle snapshots cover the selected **44
 | 487.5 | AR accepted | ID=0; address=0x10000000; 2 beats x 8 B; INCR |
 | 502.5 | RLAST accepted | RESP=0 |
 | 517.5 | AW accepted | ID=0; address=0x40000000; 2 beats x 8 B; FIXED |
-| 522.5 | WLAST accepted | WSTRB=0xff |
-| 527.5 | B response accepted | RESP=0 |
-| 532.5 | P0 DA accepted | type=0 (single); measured on peripheral clock |
-| 567.5 | P0 DR accepted | type=1 (burst); measured on peripheral clock |
-| 567.5 | WFP grant | 0x1 |
+| 527.5 | WLAST accepted | WSTRB=0xff |
+| 537.5 | B response accepted | RESP=0 |
+| 542.5 | P0 DA accepted | type=0 (single); measured on peripheral clock |
+| 577.5 | P0 DR accepted | type=1 (burst); measured on peripheral clock |
+| 577.5 | WFP grant | 0x1 |
 
 Useful constant context: `arready=1 (no back-pressure)`; `awready=1 (no back-pressure)`; `wready=1 (no back-pressure)`.
 
@@ -68,18 +65,18 @@ Useful constant context: `arready=1 (no back-pressure)`; `awready=1 (no back-pre
 
 [Open SVG at full size](../svg/12_request_types_2.svg) | [WaveDrom JSON](../wavejson/12_request_types_2.json)
 
-Source: `direct_periph_mixed`. Core/unit cycle snapshots cover the selected **687.5..847.5 ns** interval. The first cell's right sampling edge is **687.5 ns**.
+Source: `direct_periph_mixed`. Core/unit cycle snapshots cover the selected **697.5..857.5 ns** interval. The first cell's right sampling edge is **697.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
-| 707.5 | P0 DR accepted | type=0 (single); measured on peripheral clock |
-| 707.5 | WFP grant | 0x1 |
-| 737.5 | AR accepted | ID=0; address=0x10000020; 1 beats x 8 B; INCR |
-| 747.5 | RLAST accepted | RESP=0 |
-| 767.5 | AW accepted | ID=0; address=0x40000000; 1 beats x 8 B; FIXED |
-| 767.5 | WLAST accepted | WSTRB=0xff |
-| 787.5 | B response accepted | RESP=0 |
-| 797.5 | P0 DA accepted | type=0 (single); measured on peripheral clock |
+| 717.5 | P0 DR accepted | type=0 (single); measured on peripheral clock |
+| 717.5 | WFP grant | 0x1 |
+| 747.5 | AR accepted | ID=0; address=0x10000020; 1 beats x 8 B; INCR |
+| 757.5 | RLAST accepted | RESP=0 |
+| 777.5 | AW accepted | ID=0; address=0x40000000; 1 beats x 8 B; FIXED |
+| 782.5 | WLAST accepted | WSTRB=0xff |
+| 797.5 | B response accepted | RESP=0 |
+| 802.5 | P0 DA accepted | type=0 (single); measured on peripheral clock |
 
 Useful constant context: `arready=1 (no back-pressure)`; `awready=1 (no back-pressure)`; `wready=1 (no back-pressure)`.
 

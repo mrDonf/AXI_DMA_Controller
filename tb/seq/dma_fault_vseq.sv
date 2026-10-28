@@ -192,11 +192,10 @@ class dma_fault_vseq extends dma_base_vseq;
         a.dmald(); a.dmast();
         run_fault("endian swap: FIXED beat narrower than the group", a, dma330_pkg::FTC_CH_RDWR_ERR);
 
-        if (dma_tb_params_pkg::DATA_W < 128) begin
-          a = prologue(src, dst, dma330_asm::ccr(1, 3, 2, 1, 3, 2, 0, 0, 0, 0, 4));
-          a.dmald(); a.dmast();
-          run_fault("endian swap wider than the bus", a, dma330_pkg::FTC_CH_RDWR_ERR);
-        end
+        // Encodings 5..7 are reserved. A 128-bit group on a 64-bit bus is legal.
+        a = prologue(src, dst, dma330_asm::ccr(1, 3, 2, 1, 3, 2, 0, 0, 0, 0, 5));
+        a.dmald(); a.dmast();
+        run_fault("reserved endian swap encoding", a, dma330_pkg::FTC_CH_RDWR_ERR);
 
         a = prologue(src, dst + 2, dma330_asm::ccr(1, 3, 2, 1, 3, 2, 0, 0, 0, 0, 2));
         a.dmald(); a.dmast();

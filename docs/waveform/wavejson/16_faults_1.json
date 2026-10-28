@@ -2,14 +2,20 @@
   "signal": [
     {
       "name": "sample clock",
-      "wave": "p.|p...........|p."
+      "wave": "p...................|p."
     },
     {
       "name": "source cycle",
-      "wave": "==|============|==",
+      "wave": "====================|==",
       "data": [
         "0",
         "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
         "8",
         "9",
         "10",
@@ -30,13 +36,15 @@
       "Thread",
       {
         "name": "ch0.state (internal)",
-        "wave": "5.|5.75.75.799.|9.",
+        "wave": "5........7857485799.|9.",
         "data": [
           "FET",
+          "EX",
+          "UPC",
           "FET",
           "EX",
-          "FET",
-          "EX",
+          "CFG",
+          "UPC",
           "FET",
           "EX",
           "FC",
@@ -45,10 +53,25 @@
         ]
       },
       {
-        "name": "ch0.PC",
-        "wave": "5.|5..5..5.....|5.",
+        "name": "ch0.CSR status",
+        "wave": "5.....7...87.487.99.|9.",
         "data": [
-          "00010000",
+          "MISS",
+          "RUN",
+          "UPC",
+          "RUN",
+          "BAR",
+          "UPC",
+          "RUN",
+          "FC",
+          "FLT",
+          "FLT"
+        ]
+      },
+      {
+        "name": "ch0.PC",
+        "wave": "5..........5...5....|5.",
+        "data": [
           "00010000",
           "00010006",
           "0001000c",
@@ -57,7 +80,7 @@
       },
       {
         "name": "opcode (when EXEC)",
-        "wave": "x.|x.2x.2x.7x..|x.",
+        "wave": "x........2x.2x..7x..|x.",
         "data": [
           "MOV",
           "MOV",
@@ -66,9 +89,8 @@
       },
       {
         "name": "ftr",
-        "wave": "2.|2........9..|9.",
+        "wave": "2................9..|9.",
         "data": [
-          "00000000",
           "00000000",
           "00002000",
           "00002000"
@@ -76,19 +98,19 @@
       },
       {
         "name": "dp_flush",
-        "wave": "0.|0........1..|1."
+        "wave": "0............10..1..|1."
       }
     ],
     {
       "name": "irq_abort",
-      "wave": "0.|0........1..|1."
+      "wave": "0................1..|1."
     }
   ],
   "head": {
     "text": "Diagnose a precise program fault and an imprecise bus fault - 1"
   },
   "foot": {
-    "text": "1 cell = 5 ns; first RIGHT edge = 302.5 ns; | = omitted idle cycles"
+    "text": "1 cell = 5 ns; first RIGHT edge = 307.5 ns; | = omitted idle cycles"
   },
   "config": {
     "hscale": 1,
@@ -101,12 +123,16 @@
     "exclude_instruction_fetch": true,
     "clock_source": "dma_wave_top.tb.aclk",
     "cycle_ns": 5.0,
-    "first_right_edge_ns": 302.5,
-    "last_right_edge_ns": 457.5,
+    "first_right_edge_ns": 307.5,
+    "last_right_edge_ns": 462.5,
     "right_edge_ns": [
-      302.5,
       307.5,
-      null,
+      312.5,
+      317.5,
+      322.5,
+      327.5,
+      332.5,
+      337.5,
       342.5,
       347.5,
       352.5,
@@ -119,19 +145,15 @@
       387.5,
       392.5,
       397.5,
+      402.5,
       null,
-      452.5,
-      457.5
+      457.5,
+      462.5
     ],
     "idle_gaps": [
       {
-        "after_ns": 307.5,
-        "before_ns": 342.5,
-        "omitted_samples": 6
-      },
-      {
-        "after_ns": 397.5,
-        "before_ns": 452.5,
+        "after_ns": 402.5,
+        "before_ns": 457.5,
         "omitted_samples": 10
       }
     ],
@@ -338,14 +360,19 @@
         "samples": [
           "1",
           "1",
-          null,
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
           "1",
           "1",
           "10",
-          "1",
+          "1010",
           "1",
           "10",
-          "1",
+          "1011",
+          "1010",
           "1",
           "10",
           "1000",
@@ -358,20 +385,56 @@
         "gate": null
       },
       {
+        "name": "ch0.CSR status",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.csr[3:0]",
+        "width": 4,
+        "samples": [
+          "0010",
+          "0010",
+          "0010",
+          "0010",
+          "0010",
+          "0010",
+          "0001",
+          "0001",
+          "0001",
+          "0001",
+          "0011",
+          "0001",
+          "0001",
+          "0101",
+          "0011",
+          "0001",
+          "0001",
+          "1110",
+          "1111",
+          "1111",
+          null,
+          "1111",
+          "1111"
+        ],
+        "gate": null
+      },
+      {
         "name": "ch0.PC",
         "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.pc",
         "width": 32,
         "samples": [
           "10000000000000000",
           "10000000000000000",
-          null,
+          "10000000000000000",
+          "10000000000000000",
+          "10000000000000000",
+          "10000000000000000",
+          "10000000000000000",
+          "10000000000000000",
           "10000000000000000",
           "10000000000000000",
           "10000000000000000",
           "10000000000000110",
           "10000000000000110",
           "10000000000000110",
-          "10000000000001100",
+          "10000000000000110",
           "10000000000001100",
           "10000000000001100",
           "10000000000001100",
@@ -393,10 +456,15 @@
           null,
           null,
           null,
+          null,
+          null,
+          null,
+          null,
           "10111100",
           null,
           null,
           "10111100",
+          null,
           null,
           null,
           "1000",
@@ -416,7 +484,12 @@
         "samples": [
           "0",
           "0",
-          null,
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
           "0",
           "0",
           "0",
@@ -442,13 +515,18 @@
         "samples": [
           "0",
           "0",
-          null,
           "0",
           "0",
           "0",
           "0",
           "0",
           "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
           "0",
           "0",
           "0",
@@ -468,7 +546,12 @@
         "samples": [
           "0",
           "0",
-          null,
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
           "0",
           "0",
           "0",
@@ -535,7 +618,9 @@
         "6": "6",
         "7": "8",
         "8": "9",
-        "9": "9"
+        "9": "9",
+        "10": "8",
+        "11": "4"
       },
       "data_symbols": [],
       "meaning": "State colors indicate state categories; data colors identify values within one figure. Labels remain authoritative; colors repeat after six distinct data values.",
@@ -548,9 +633,9 @@
     "operation": "16_faults",
     "number": 1,
     "source_window_ns": [
-      302.5,
-      462.5
+      307.5,
+      467.5
     ],
-    "source_vcd_sha256": "aa607ee40e4cebe40d2759eca3abace966d4e233f7e00d5dae0bb7506a57f15c"
+    "source_vcd_sha256": "eb7012d3a60599b661d94b73e815faf6536beb0747081231f0f6b2523b509ff4"
   }
 }

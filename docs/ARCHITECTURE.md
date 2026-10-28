@@ -73,7 +73,8 @@ logic between domains. SVA checks handshake payload stability.
 
 ### 4.1 Channel thread (`dma_channel`)
 ```
-STOPPED --DMAGO--> FETCH <--> EXEC --+--> WFE        (DMAWFE)
+STOPPED --DMAGO--> FETCH --> EXEC --> UPDATING_PC --> FETCH
+                               +--> WFE        (DMAWFE)
                      ^               +--> WFP        (DMAWFP)
                      |               +--> BARRIER    (DMARMB / DMAWMB)
                      +---------------+--> COMPLETING (DMAEND)  --> STOPPED
@@ -85,7 +86,15 @@ any fault ----> FAULT_COMPLETING --> FAULTING --(debug DMAKILL)--> KILLING
   The thread only waits where the ISA demands it (barriers, `DMAEND`, events,
   peripheral requests) or when a queue is full.
 * Each thread has a private one-line instruction buffer (`dma_fetch_unit`);
-  instructions that straddle two lines are assembled from both.
+  instructions that straddle cache lines are assembled from up to three lines.
+* Updating PC is an explicit phase in both manager and channel threads
+  (architectural status 3). It calculates/commits the next sequential or branch
+  address and overlaps the next fetch. Event/peripheral/barrier wakeups pass
+  through it; debug instructions leave the manager's program PC unchanged.
+* FETCH is an internal control state. Its architectural status is Executing
+  except when the shared I-cache reports a real refill for that thread
+  (AR pending or R collection), which reports Cache miss (2). Waiting for a
+  shared-cache hit or instruction assembly does not itself report Cache miss.
 * Faults stop the program, flush the channel's queued requests and drop its
   returning read data, wait for in-flight AXI bursts to retire, then park in
   FAULTING until the debugger sends `DMAKILL`.
@@ -94,7 +103,7 @@ any fault ----> FAULT_COMPLETING --> FAULTING --(debug DMAKILL)--> KILLING
 Runs `DMAGO`, `DMASEV`, `DMAWFE`, `DMANOP`, `DMAEND`, `DMAKILL` (`DMAFLUSHP` is
 channel only: undefined in the manager), from memory (`boot_from_pc`) or one at
 a time from DBGINST0/1; debug instructions are also taken while the manager
-waits in `DMAWFE` (it then returns to the wait). A non-secure manager cannot
+waits in `DMAWFE` (it then returns to the wait), or while executing a boot program (it resumes the same PC). A non-secure manager cannot
 start a secure channel (`dmago_err`, FTRD[4]) or use a secure event
 (`mgr_evnt_err`, FTRD[5]); a missing channel / event number is
 `operand_invalid`. An accepted `DMAGO` invalidates only the stopped target
@@ -111,12 +120,11 @@ a retry after draining any outstanding AXI read, without allocating old bytes.
   peripheral (`ch_periph_err`) or a secure access requested in CCR
   (`AxPROT[1]` = 0: `ch_rdwr_err`). NS threads fetch with `ARPROT[1]` = 1 and
   the instruction cache tags every line with its thread ID and the NS state of its fill.
-* The secure APB port sees everything. The non-secure port reads zero / ignores
-  writes for secure resources (manager, channels, WD; INTEN/RIS/INTMIS/INTCLR/
-  FSRC entirely while the manager is secure, TRM Table 3-1, and their secure
-  bits otherwise), has its own DBGINST0/1, and its debug instructions to secure
-  threads are ignored. Simultaneous accesses: the secure port goes first, the
-  NS port waits one cycle.
+* The secure APB port sees everything. DNS gates NS access to control, fault,
+  debug, configuration and WD registers (TRM Tables 3-1, 3-4, 3-5). With DNS=1
+  the complete control registers are visible; channel state/AXI registers
+  follow CNS. Both ports share write-only DBGINST0/1; writes while debug busy
+  are ignored. Simultaneous accesses prioritize the secure port.
 
 ## 5. Data path (`dma_datapath`)
 
@@ -215,28 +223,23 @@ All DMA-330 instructions are implemented with DMA-330 encodings:
 DMALPEND[S|B] DMALPFE DMAMOV DMANOP DMARMB DMASEV DMAST[S|B] DMASTP<S|B> DMASTZ
 DMAWFE DMAWFP<S|B|P> DMAWMB`.
 
-## 9. Differences from Arm DMA-330
+## 9. Conformance and integration profile
 
-Checked against TRM r1p2 (DDI 0424D). v1.4 fixed S-form burst length,
-DMAWFP single/burst, 4 KB
-split, load-lock, DMAFLUSHP barrier, NS CCR check, NS-tagged I-cache, fault
-codes, AXI attributes, `PERIPH_ID`, CCR reset and EXOKAY. The `Codex_rtl`
-changes add thread-local cache maintenance, cancellation of stale fetches
-and consecutive write bursts. Remaining differences:
+TRM fixes include conditional-store load-lock, implicit DMAMOV discontinuity
+barriers/discard, real-time manager debug, DNS-gated APB control/debug/config
+access, precise NS CCR faults at MOV, and CR1-valid 4/8/16/32-byte cache lines.
+128-bit endian groups are supported on every bus width. Instruction assembly
+handles a six-byte MOV spanning three four-byte lines. AW can run ahead of W;
+the cache serves another thread's hit while a refill waits on AR/R.
 
-| Item | This design |
-|------|-------------|
-| Mid-stream alignment change (TRM 2.11.3) | The MFIFO is a byte stream: no barrier, no data discarded |
-| Unaligned FIXED bursts | Accepted (programming error in the TRM) |
-| Burst size > bus width | `ch_rdwr_err` (TRM: precise abort, bit not named) |
-| NS port with an NS manager | INTEN/RIS/INTMIS/INTCLR/FSRC limited to NS events / channels (stricter than the TRM) |
-| Lock-up | Precise detection per MFIFO line, plus a time-out watchdog (`WD[31:16]`, `WDSTAT`) for hung buses |
-| Write bursts | A write burst starts only when all its data is in the MFIFO |
-| `DMAGO` | Invalidates only a stopped target channel on start; a running target is a complete NOP |
-| Interfaces | AXI4 instead of AXI3 (no WID), ARID all ones for instruction fetches, optional APB async bridge instead of `pclken`, request latch of depth 1 per peripheral |
-| Extensions | `FARn` (0x060+4n), `WDSTAT` (0xE84), `WD[31:16]`, Q-Channel, optional `PSLVERR` (`APB_SLVERR`) |
-| Configuration limits | MFIFO >= 32 lines; I-cache line a power of two >= 8 bytes; swap group <= bus width |
-| Forever loop encoding | `DMALPFE` with S/B condition uses the LC1 encoding (0x29/0x2B decode as DMASTP) |
+The integration profile remains AXI4 (no WID), one all-ones instruction-fetch
+ID, optional asynchronous APB bridges instead of pclken, and a one-entry
+peripheral request latch. FARn, WDSTAT, watchdog timeout, Q-Channel and optional
+PSLVERR are extensions. The densely packed internal byte-stream MFIFO can use
+a different number of entries from the destination-formatted examples in Arm
+Appendix B. This is not a pin/cycle/resource-identical copy of the Arm macro.
+See DESIGN_SPEC section 9 and RTL_SPEC_FIXES.md for the exact contract and
+validation evidence.
 
 ## 10. Verification
 

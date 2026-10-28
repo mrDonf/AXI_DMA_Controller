@@ -30,7 +30,7 @@ def run(tool, *args, log):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rtl-root", type=Path, default=ROOT / "rtl")
-    parser.add_argument("--top", choices=["dma_icache_tb", "dma_fetch_unit_tb", "dma_wr_engine_tb"])
+    parser.add_argument("--top", choices=["dma_icache_tb", "dma_fetch_unit_tb", "dma_wr_engine_tb", "dma_thread_status_tb"])
     parser.add_argument("--library", default="unit_work")
     parser.add_argument("--mutations", action="store_true", help="also confirm that the planted bugs fail")
     parser.add_argument("--cov", action="store_true",
@@ -45,8 +45,9 @@ def main(argv=None):
     if not (HERE / lib).exists():
         run("vlib", lib, log=logs / "vlib.log")
     rtl = ["core/dma330_pkg.sv", "common/dma_sync_fifo.sv", "common/dma_rr_arbiter.sv",
-           "core/dma_icache.sv", "core/dma_fetch_unit.sv", "core/dma_wr_engine.sv"]
-    tops = ["dma_icache_tb", "dma_fetch_unit_tb", "dma_wr_engine_tb"]
+           "core/dma_icache.sv", "core/dma_fetch_unit.sv", "core/dma_wr_engine.sv",
+           "core/dma_channel.sv", "core/dma_manager.sv"]
+    tops = ["dma_icache_tb", "dma_fetch_unit_tb", "dma_wr_engine_tb", "dma_thread_status_tb"]
     # Same coverage options as the UVM build (run_regression.py), RTL only
     rtl_cov = ["+cover=bcesf", "-coverexcludedefault", "-nofsmresettrans"] if args.cov else []
     run("vlog", "-sv", "-svinputport=var", "-quiet", "-work", lib, *rtl_cov,
@@ -57,9 +58,10 @@ def main(argv=None):
     if args.cov:
         cov_dir.mkdir(parents=True, exist_ok=True)
     cases = [("dma_icache_tb", {"DATA_W": w, "BEATS": b})
-             for w, b in [(32, 2), (64, 1), (64, 4), (128, 4)]]
-    cases += [("dma_fetch_unit_tb", {"LINE_BYTES": b}) for b in (8, 32)]
+             for w, b in [(32, 1), (32, 2), (64, 1), (64, 4), (128, 1), (128, 2)]]
+    cases += [("dma_fetch_unit_tb", {"LINE_BYTES": b}) for b in (4, 8, 16, 32)]
     cases += [("dma_wr_engine_tb", {"DATA_W": w}) for w in (32, 64, 128)]
+    cases += [("dma_thread_status_tb", {"MANAGER": m}) for m in (0, 1)]
     if args.top:
         cases = [case for case in cases if case[0] == args.top]
     for top, params in cases:
@@ -100,13 +102,21 @@ def check_mutations(rtl, logs):
         ("next_line_retry", "core/dma_fetch_unit.sv", "dma_fetch_unit_tb", "cancelled fetch delivered", [
             # second-line (F_NEXT) response: the one followed by "insn <="
             ("if (fetch_req && !aborted && !inv && !ic_resp_retry) begin\n              if (ic_resp_err) begin\n"
-             "                fetch_err <= 1'b1;\n              end else begin\n                insn ",
+             "                fetch_err <= 1'b1;\n              end else if (int'(pc_off)",
              "if (fetch_req && !aborted && !inv) begin\n              if (ic_resp_err) begin\n"
-             "                fetch_err <= 1'b1;\n              end else begin\n                insn ")]),
+             "                fetch_err <= 1'b1;\n              end else if (int'(pc_off)")]),
         ("write_bubble", "core/dma_wr_engine.sv", "dma_wr_engine_tb", "avoidable W bubble", [
-            ("assign start     = (!act_valid || finish) && sel_valid;", "assign start     = !act_valid && sel_valid;")]),
+            ("assign start     = (!act_valid || finish) && !ctx_empty;", "assign start     = !act_valid && !ctx_empty;")]),
         ("write_overclaim", "core/dma_wr_engine.sv", "dma_wr_engine_tb", "MFIFO underflow", [
-            ("(int'(mf_count[ch]) - (last_pop[ch] ? int'(mf_pop_n) : 0))", "int'(mf_count[ch])")]),
+            ("(int'(mf_count[ch]) - int'(issued_bytes[ch]))", "int'(mf_count[ch])")]),
+        ("channel_update_hidden", "core/dma_channel.sv", "dma_thread_status_tb", "Updating PC count", [
+            ("C_UPDATING_PC:      status = ST_UPDATING_PC;", "C_UPDATING_PC:      status = ST_EXECUTING;")]),
+        ("manager_update_hidden", "core/dma_manager.sv", "dma_thread_status_tb", "Updating PC count", [
+            ("M_UPDATING_PC: status = ST_UPDATING_PC;", "M_UPDATING_PC: status = ST_EXECUTING;")]),
+        ("channel_false_miss", "core/dma_channel.sv", "dma_thread_status_tb", "false Cache miss", [
+            ("C_FETCH:            status = ic_refill ?", "C_FETCH:            status = ic_req ?")]),
+        ("manager_false_miss", "core/dma_manager.sv", "dma_thread_status_tb", "false Cache miss", [
+            ("M_FETCH:    status = ic_refill ?", "M_FETCH:    status = ic_req ?")]),
     ]
     for name, target, top, diagnostic, patches in mutants:
         dest = logs / "mutations" / name

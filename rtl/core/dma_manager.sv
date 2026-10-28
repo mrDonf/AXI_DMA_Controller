@@ -10,16 +10,15 @@
 //   * single instructions written through the debug registers
 //     (DBGINST0/1 + DBGCMD) - the usual way a driver starts channels.
 //
-//   BOOT --boot_from_pc--> FETCH <--> EXEC --> WFE
-//     |                      ^         |        |  ^
-//     +--> STOPPED <---------+---------+        |  | debug instruction done
-//            |  ^         (DMAEND / DMAKILL)    v  |
-//            |  +---- FAULTING <--- any fault   EXEC (debug)
-//            +-- debug instruction --> EXEC
+//   BOOT --boot_from_pc--> FETCH --> EXEC --> UPDATING_PC --> FETCH
+//     +--> STOPPED                    +--> WFE --event--> UPDATING_PC
+//   EXEC --DMAEND/DMAKILL--> STOPPED
+//   STOPPED/WFE --debug instruction--> EXEC --debug done--> STOPPED/WFE
+//   any fault --> FAULTING --debug DMAKILL--> STOPPED
 //
-// Debug instructions (DMAGO, DMASEV, DMAKILL) are taken while the manager is
-// stopped or waiting for an event (TRM 2.5.1: "real-time"); a debug
-// instruction issued while it waits returns it to the wait (DMAKILL stops it).
+// Debug instructions (DMAGO, DMASEV, DMAKILL) can interrupt program fetch,
+// including stalled refills (TRM 2.5.1). Non-kill commands resume the same PC
+// or event wait; DMAKILL stops the manager and cancels stale fetch delivery.
 // DMAGO on a channel that is not stopped is ignored by the channel (NOP), as
 // in DMA-330. A non-secure manager cannot start a secure channel (dmago_err)
 // and cannot use a secure event in DMASEV / DMAWFE (mgr_evnt_err). A channel
@@ -55,6 +54,7 @@ module dma_manager
   input  logic [LINE_BYTES*8-1:0] ic_resp_data,
   input  logic                    ic_resp_err,
   input  logic                    ic_resp_retry,
+  input  logic                    ic_refill,
 
   // Channel start
   output logic [NUM_CH-1:0]       go_valid,
@@ -86,7 +86,7 @@ module dma_manager
 );
 
   typedef enum logic [2:0] {
-    M_BOOT, M_STOPPED, M_FETCH, M_EXEC, M_WFE, M_FAULTING
+    M_BOOT, M_STOPPED, M_FETCH, M_EXEC, M_WFE, M_FAULTING, M_UPDATING_PC
   } mstate_e;
 
   mstate_e           state;
@@ -94,27 +94,29 @@ module dma_manager
   logic              mgr_ns;       // manager security state
   logic              dbg_mode;     // executing a debug instruction
   logic              dbg_ret_wfe;  // ... taken while waiting for an event
+  logic              dbg_ret_fetch;
   logic [INSN_W-1:0] dbg_insn_q;
   logic [4:0]        wake_num;
 
   //============================================================================
   // Instruction fetch
   //============================================================================
-  logic              insn_valid, fetch_err, fetch_miss;
+  logic              insn_valid, fetch_err;
   logic [INSN_W-1:0] fetch_insn;
+  logic [ADDR_W-1:0] fetch_pc;
 
   assign ic_ns = mgr_ns;
 
   dma_fetch_unit #(.LINE_BYTES(LINE_BYTES)) u_fetch (
     .clk           (clk),
     .rst_n         (rst_n),
-    .fetch_req     (state == M_FETCH),
-    .pc            (pc),
+    .fetch_req     ((state == M_FETCH) || (state == M_UPDATING_PC)),
+    .pc            (fetch_pc),
     .inv           (ic_inv),
     .insn_valid    (insn_valid),
     .insn          (fetch_insn),
     .fetch_err     (fetch_err),
-    .miss          (fetch_miss),
+    .miss          (), // front-end pending is not architectural Cache miss
     .ic_req        (ic_req),
     .ic_addr       (ic_addr),
     .ic_resp_valid (ic_resp_valid),
@@ -138,6 +140,9 @@ module dma_manager
   assign num5  = b1[7:3];
   assign go_ch = b1[2:0];
   assign cls   = decode_op(op);
+  // Overlap PC calculation with the next fetch; debug instructions leave
+  // the program PC untouched and never enter M_UPDATING_PC.
+  assign fetch_pc = (state == M_UPDATING_PC) ? pc + ADDR_W'(insn_len(op)) : pc;
 
   logic [31:0] exec_fault;
   logic [31:0] irq_ns32, periph_ns32;
@@ -211,6 +216,7 @@ module dma_manager
       mgr_ns     <= 1'b0;
       dbg_mode   <= 1'b0;
       dbg_ret_wfe <= 1'b0;
+      dbg_ret_fetch <= 1'b0;
       dbg_insn_q <= '0;
       wake_num   <= '0;
       ftrd       <= '0;
@@ -225,6 +231,7 @@ module dma_manager
         M_STOPPED: begin
           if (dbg_valid) begin
             dbg_mode   <= 1'b1;
+            dbg_ret_fetch <= 1'b0;
             dbg_insn_q <= dbg_insn;
             state      <= M_EXEC;
           end
@@ -232,11 +239,18 @@ module dma_manager
 
         M_FETCH: begin
           dbg_mode <= 1'b0;
-          if (insn_valid) state <= M_EXEC;
-          if (fetch_err) begin
+          // Real-time debug preempts a fetch, including a stalled refill.
+          // Dropping fetch_req while the debug instruction executes drains
+          // and suppresses the old fetch; resuming retries the unchanged PC.
+          if (dbg_valid) begin
+            dbg_mode <= 1'b1;
+            dbg_ret_fetch <= 1'b1;
+            dbg_insn_q <= dbg_insn;
+            state <= M_EXEC;
+          end else if (fetch_err) begin
             ftrd[FTD_INSTR_FETCH_ERR] <= 1'b1;
             state                     <= M_FAULTING;
-          end
+          end else if (insn_valid) state <= M_EXEC;
         end
 
         M_EXEC: begin
@@ -244,6 +258,7 @@ module dma_manager
             ftrd     <= ftrd | exec_fault;
             dbg_mode <= 1'b0;
             dbg_ret_wfe <= 1'b0;
+            dbg_ret_fetch <= 1'b0;
             state    <= M_FAULTING;
           end else begin
             case (cls)
@@ -254,25 +269,30 @@ module dma_manager
               end
               default: begin                       // GO, SEV, NOP
                 if (dbg_mode) begin
-                  state <= dbg_ret_wfe ? M_WFE : M_STOPPED;
+                  state <= dbg_ret_wfe ? M_WFE : dbg_ret_fetch ? M_FETCH : M_STOPPED;
                 end else begin
-                  pc    <= pc + ADDR_W'(insn_len(op));
-                  state <= M_FETCH;
+                  state <= M_UPDATING_PC;
                 end
               end
             endcase
             dbg_mode    <= 1'b0;
             dbg_ret_wfe <= 1'b0;
+            dbg_ret_fetch <= 1'b0;
           end
+        end
+
+        M_UPDATING_PC: begin
+          pc    <= pc + ADDR_W'(insn_len(op));
+          state <= M_FETCH;
         end
 
         M_WFE: begin
           if (wfe_hit) begin
-            pc    <= pc + 2;
-            state <= M_FETCH;
+            state <= M_UPDATING_PC;
           end else if (dbg_valid) begin           // debug instruction while waiting
             dbg_mode    <= 1'b1;
             dbg_ret_wfe <= 1'b1;
+            dbg_ret_fetch <= 1'b0;
             dbg_insn_q  <= dbg_insn;
             state       <= M_EXEC;
           end
@@ -298,8 +318,9 @@ module dma_manager
 
   always_comb begin
     case (state)
-      M_FETCH:    status = fetch_miss ? ST_CACHE_MISS : ST_EXECUTING;
+      M_FETCH:    status = ic_refill ? ST_CACHE_MISS : ST_EXECUTING;
       M_EXEC:     status = ST_EXECUTING;
+      M_UPDATING_PC: status = ST_UPDATING_PC;
       M_WFE:      status = ST_WAIT_EVENT;
       M_FAULTING: status = ST_FAULTING;
       default:    status = ST_STOPPED;

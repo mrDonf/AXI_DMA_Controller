@@ -48,7 +48,7 @@ class dma_security_vseq extends dma_base_vseq;
   // Register offsets used outside the RAL
   localparam bit [11:0] A_DSR = 12'h000, A_DPC = 12'h004, A_INTEN = 12'h020, A_RIS = 12'h024,
                         A_INTMIS = 12'h028, A_INTCLR = 12'h02C, A_FSRD = 12'h030, A_FSRC = 12'h034,
-                        A_FTRD = 12'h038, A_DBGSTATUS = 12'hD00, A_DBGINST0 = 12'hD08,
+                        A_FTRD = 12'h038, A_DBGSTATUS = 12'hD00, A_DBGCMD = 12'hD04, A_DBGINST0 = 12'hD08,
                         A_DBGINST1 = 12'hD0C, A_CR0 = 12'hE00, A_CR3 = 12'hE0C, A_CR4 = 12'hE10,
                         A_WD = 12'hE80;
 
@@ -100,8 +100,8 @@ class dma_security_vseq extends dma_base_vseq;
     bit [31:0] v;
     for (int p = 0; p < 2; p++) begin
       string port = p ? "NS" : "S";
-      apb_rd(p, A_CR3, v);  expect_eq({port, " CR3"}, v, 32'(IRQ_NS));
-      apb_rd(p, A_CR4, v);  expect_eq({port, " CR4"}, v, 32'(PERIPH_NS));
+      apb_rd(p, A_CR3, v);  expect_eq({port, " CR3"}, v, (p && !mgr_ns) ? 0 : 32'(IRQ_NS));
+      apb_rd(p, A_CR4, v);  expect_eq({port, " CR4"}, v, (p && !mgr_ns) ? 0 : 32'(PERIPH_NS));
       apb_rd(p, A_CR0, v);  expect_eq({port, " CR0.mgr_ns_at_rst"}, v[2], mgr_ns);
     end
     apb_rd(0, A_DSR, v);
@@ -114,7 +114,7 @@ class dma_security_vseq extends dma_base_vseq;
   // Channel registers: hidden for a secure channel, shared for a NS one
   //----------------------------------------------------------------------------
   protected task channel_view(int unsigned ch, bit ns);
-    bit [11:0] regs [$] = '{a_ftr(ch), 12'h060 + 12'(4 * ch), a_csr(ch), a_cpc(ch)};
+    bit [11:0] regs [$] = '{12'h060 + 12'(4 * ch), a_csr(ch), a_cpc(ch)};
     bit [31:0] vs, vn;
     for (int k = 0; k < 5; k++) regs.push_back(12'h400 + 12'(32 * ch + 4 * k));
     foreach (regs[i]) begin
@@ -174,18 +174,20 @@ class dma_security_vseq extends dma_base_vseq;
   endtask
 
   //----------------------------------------------------------------------------
-  // Each port has its own debug instruction registers
+  // TRM Table 3-4: shared write-only debug registers, DNS gates NS writes.
   //----------------------------------------------------------------------------
   protected task debug_banks();
     bit [31:0] v;
-    apb_wr(0, A_DBGINST0, 32'h1234_0001);
+    apb_wr(0, A_DBGINST0, 32'h0034_0001); // channel 0 DMASEV event 0
     apb_wr(0, A_DBGINST1, 32'hA5A5_A5A5);
     apb_wr(1, A_DBGINST0, 32'h5678_0300);
     apb_wr(1, A_DBGINST1, 32'h5A5A_5A5A);
-    apb_rd(0, A_DBGINST0, v);  expect_eq("S DBGINST0", v, 32'h1234_0001);
-    apb_rd(0, A_DBGINST1, v);  expect_eq("S DBGINST1", v, 32'hA5A5_A5A5);
-    apb_rd(1, A_DBGINST0, v);  expect_eq("NS DBGINST0", v, 32'h5678_0300);
-    apb_rd(1, A_DBGINST1, v);  expect_eq("NS DBGINST1", v, 32'h5A5A_5A5A);
+    apb_rd(0, A_DBGINST0, v);  expect_eq("S WO DBGINST0", v, 0);
+    apb_rd(0, A_DBGINST1, v);  expect_eq("S WO DBGINST1", v, 0);
+    apb_rd(1, A_DBGINST0, v);  expect_eq("NS WO DBGINST0", v, 0);
+    apb_rd(1, A_DBGINST1, v);  expect_eq("NS WO DBGINST1", v, 0);
+    apb_wr(0,A_DBGCMD,0);
+    wait_irq(0); clear_irq(0); // ignored NS writes did not replace secure command
   endtask
 
   // Both ports busy at the same time: accesses that meet in the same cycle are
@@ -198,13 +200,13 @@ class dma_security_vseq extends dma_base_vseq;
         bit [31:0] v, w = 32'h5000_0000 | i;
         apb_wr(0, A_DBGINST1, w);
         apb_rd(0, A_DBGINST1, v);
-        if (v != w) bad++;
+        if (v != 0) bad++;
       end
       for (int i = 0; i < 64; i++) begin
         bit [31:0] v, w = 32'hA000_0000 | i;
         apb_wr(1, A_DBGINST1, w);
         apb_rd(1, A_DBGINST1, v);
-        if (v != w) bad++;
+        if (v != 0) bad++;
       end
     join
     if (bad != 0) `uvm_error("SEC", $sformatf("concurrent S / NS accesses: %0d reads returned the wrong data", bad))
@@ -292,11 +294,16 @@ class dma_security_vseq extends dma_base_vseq;
     expect_eq({name, ": S FSRC"}, v, 1 << N_CH);
     apb_rd(1, A_FSRC, v);
     expect_eq({name, ": NS FSRC with a secure manager"}, v, 0);
-    apb_rd(1, a_ftr(N_CH), v);
+    apb_rd(1, a_ftr(N_CH), v); expect_eq({name, ": NS FTR RAZ with secure manager"},v,0);
+    apb_rd(0, a_ftr(N_CH), v);
     if (v != (1 << exp_bit))
       `uvm_error("SEC", $sformatf("%s: NS FTR=0x%08h, only bit %0d expected", name, v, exp_bit))
     p_sequencer.cov.sample_fault(v, 0);
-    dbg_exec_ns(1, N_CH, '{8'h01});                         // NS DMAKILL of a NS channel
+    dbg_exec_ns(1, N_CH, '{8'h01}); // ignored even though target is non-secure
+    vif.wait_clks(20);
+    apb_rd(0,a_csr(N_CH),v);
+    expect_eq({name, ": NS DMAKILL ignored with DNS=0"},v[3:0],dma330_pkg::ST_FAULTING);
+    kill_channel(N_CH);
     wait_status_port(1, N_CH, dma330_pkg::ST_STOPPED);
     apb_rd(1, a_ftr(N_CH), v);  expect_eq({name, ": FTR after the NS DMAKILL"}, v, 0);
     p_sequencer.sb.ignore_channel(N_CH, 0);
@@ -338,12 +345,12 @@ class dma_security_vseq extends dma_base_vseq;
 
     // Debug DMASEV of a secure event to a stopped NS channel
     p_sequencer.sb.ignore_channel(N_CH, 1);
-    dbg_sev(1, N_CH, SEC_EV);
+    dbg_sev(0, N_CH, SEC_EV);
     wait_abort();
-    apb_rd(1, a_ftr(N_CH), v);
+    apb_rd(0, a_ftr(N_CH), v);
     expect_eq("NS debug DMASEV of a secure event: FTR", v,
               (1 << dma330_pkg::FTC_CH_EVNT_ERR) | (1 << dma330_pkg::FTC_DBG_INSTR));
-    dbg_exec_ns(1, N_CH, '{8'h01});
+    kill_channel(N_CH);
     wait_status_port(1, N_CH, dma330_pkg::ST_STOPPED);
     p_sequencer.sb.ignore_channel(N_CH, 0);
 
@@ -359,7 +366,7 @@ class dma_security_vseq extends dma_base_vseq;
     clear_irq(NS_EV);                                     // secure manager: secure port
     wait_status_port(1, N_CH, dma330_pkg::ST_STOPPED);
     apb_rd(1, a_ftr(N_CH), v);   expect_eq("NS thread with NS resources: FTR", v, 0);
-    dbg_sev(1, N_CH, NS_EV);                              // NS debug DMASEV of a NS event
+    dbg_sev(0, N_CH, NS_EV); // manager remains Secure: use secure debug interface
     wait_irq(NS_EV);
     clear_irq(NS_EV);
 
@@ -470,22 +477,24 @@ class dma_security_vseq extends dma_base_vseq;
     bit [31:0] v;
     bit [15:0] both = (1 << SEC_EV) | (1 << NS_EV);
 
-    // Non-secure manager: the NS port sees and changes only the NS events
+    // TRM Table 3-1: with DNS=1 the NS port sees the complete control registers.
     reg_wr(rm.INTEN, 0);
     apb_wr(1, A_INTEN, 32'hFFFF);
-    apb_rd(0, A_INTEN, v);  expect_eq("NS manager: S INTEN after NS write 1s", v, 32'(IRQ_NS));
-    apb_rd(1, A_INTEN, v);  expect_eq("NS manager: NS INTEN", v, 32'(IRQ_NS));
+    apb_rd(0, A_INTEN, v);  expect_eq("NS manager: S INTEN after NS write 1s", v, 32'hFFFF);
+    apb_rd(1, A_INTEN, v);  expect_eq("NS manager: NS INTEN", v, 32'hFFFF);
     reg_wr(rm.INTEN, both);
     dbg_sev(0, S_CH, SEC_EV);                             // secure-port debug DMASEV
     dbg_sev(0, S_CH, NS_EV);
     wait_irq(SEC_EV);
     wait_irq(NS_EV);
-    apb_rd(1, A_RIS, v);     expect_eq("NS manager: NS INT_EVENT_RIS", v, 1 << NS_EV);
-    apb_rd(1, A_INTMIS, v);  expect_eq("NS manager: NS INTMIS", v, 1 << NS_EV);
+    apb_rd(1, A_RIS, v);     expect_eq("NS manager: NS INT_EVENT_RIS", v, both);
+    apb_rd(1, A_INTMIS, v);  expect_eq("NS manager: NS INTMIS", v, both);
     apb_wr(1, A_INTCLR, 32'hFFFF);
     vif.wait_clks(5);
-    if (vif.irq[NS_EV] !== 1'b0 || vif.irq[SEC_EV] !== 1'b1)
-      `uvm_error("SEC", $sformatf("NS INTCLR of all bits: irq=0x%04h, only the NS one should clear", vif.irq))
+    if (vif.irq[NS_EV] !== 1'b0 || vif.irq[SEC_EV] !== 1'b0)
+      `uvm_error("SEC", $sformatf("NS INTCLR of all bits: irq=0x%04h, both must clear with DNS=1", vif.irq))
+    apb_wr(1,A_WD,1); apb_rd(0,A_WD,v); expect_eq("NS WD write with DNS=1",v,1);
+    apb_wr(1,A_WD,0);
     clear_irq(SEC_EV);
     reg_wr(rm.INTEN, 0);
 

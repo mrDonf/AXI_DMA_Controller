@@ -4,7 +4,7 @@
 // Instruction cache shared by the manager and all channel threads.
 //
 //   * Fully associative, NUM_LINES lines of LINE_BEATS x DATA_W bits
-//   * Round-robin replacement, blocking (one lookup / refill at a time)
+//   * Round-robin replacement, one refill at a time, other-thread hits bypass
 //   * Requests from the threads' fetch units are served round robin
 //   * Each line is tagged with its thread and security state. Threads do not
 //     share entries: DMAWFE invalid, DMAEND and DMAKILL invalidate only the
@@ -17,6 +17,7 @@
 //   * inv[t] invalidates thread t, including any lookup/refill in flight.
 //     A cancelled refill still drains AXI, then responds with resp_retry so
 //     the fetch unit can retry without executing stale bytes or faulting.
+//   * Hit-under-miss uses the same response port; refill RLAST has priority.
 //
 //   IC_IDLE --arbitrate--> IC_LOOKUP --hit--> respond --> IC_IDLE
 //                              |miss
@@ -44,6 +45,7 @@ module dma_icache
   output logic [LINE_BEATS*DATA_W-1:0]  resp_data,
   output logic                          resp_err,
   output logic                          resp_retry,
+  output logic [NUM_THREADS-1:0]        refill_pending, // true miss, per thread
 
   // AXI refill (through the read engine)
   output logic                          ar_valid,
@@ -102,14 +104,38 @@ module dma_icache
   logic [TID_W-1:0]       arb_idx;
   logic                   arb_valid;
   logic                   arb_take;
+  logic                   bg_take, bg_active;
+  logic [NUM_THREADS-1:0]  bg_hit, arb_req;
+  logic [WAY_W-1:0]       bg_way [NUM_THREADS];
 
   assign arb_take = (state == IC_IDLE) && arb_valid;
+  assign bg_active = state == IC_AR || state == IC_R;
+  assign bg_take = bg_active && arb_valid && !(state == IC_R && r_valid && r_last);
+  assign arb_req = req & ~resp_valid & ~inv &
+                   (bg_active ? (bg_hit & ~(NUM_THREADS'(1) << cur_tid)) : '1);
+
+  // A stalled refill must not block another thread's cached instruction.
+  // Refill completion owns the shared response port on its final beat.
+  always_comb begin
+    bg_hit = '0;
+    for (int t=0;t<NUM_THREADS;t++) begin
+      bg_way[t] = '0;
+      for (int w=0;w<NUM_LINES;w++) begin
+        if (!bg_hit[t] && line_valid[w] && !inv[line_tid[w]] &&
+            line_tid[w] == TID_W'(t) && line_ns[w] == req_ns[t] &&
+            line_tag[w] == req_addr[t][ADDR_W-1:LINE_LSB]) begin
+          bg_hit[t] = 1'b1;
+          bg_way[t] = WAY_W'(w);
+        end
+      end
+    end
+  end
 
   dma_rr_arbiter #(.N(NUM_THREADS)) u_arb (
     .clk       (clk),
     .rst_n     (rst_n),
-    .req       (req & ~resp_valid & ~inv),
-    .advance   (arb_take),
+    .req       (arb_req),
+    .advance   (arb_take || bg_take),
     .gnt       (arb_gnt),
     .gnt_idx   (arb_idx),
     .gnt_valid (arb_valid)
@@ -147,6 +173,15 @@ module dma_icache
   assign r_ready  = (state == IC_R);
   assign idle     = (state == IC_IDLE);
 
+  // A front-end line-buffer miss can still hit this shared cache. Report
+  // architectural Cache miss only after lookup has selected an AXI refill,
+  // including any wait for the refill address to be accepted (TRM 2.3.3).
+  always_comb begin
+    refill_pending = '0;
+    if ((state == IC_AR || state == IC_R) && !cancelled)
+      refill_pending[cur_tid] = 1'b1;
+  end
+
   //----------------------------------------------------------------------------
   // Control
   //----------------------------------------------------------------------------
@@ -169,6 +204,10 @@ module dma_icache
     end else begin
       resp_valid <= '0;
       resp_retry <= 1'b0;
+      if (bg_take) begin
+        resp_valid[arb_idx] <= 1'b1;
+        resp_err <= 1'b0;
+      end
       if (state != IC_IDLE && inv[cur_tid]) cur_invalid <= 1'b1;
 
       case (state)
@@ -239,6 +278,8 @@ module dma_icache
       resp_data <= line_data[hit_way];
     else if (state == IC_R && r_valid && r_last)
       resp_data <= fill_buf_with_last();
+    else if (bg_take)
+      resp_data <= line_data[bg_way[arb_idx]];
   end
 
   // Fill buffer including the beat being received this cycle

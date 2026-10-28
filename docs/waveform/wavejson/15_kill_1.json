@@ -34,6 +34,17 @@
         ]
       },
       {
+        "name": "ch0.CSR status",
+        "wave": "3.|3..82.|2.",
+        "data": [
+          "WFE",
+          "WFE",
+          "KILL",
+          "STOP",
+          "STOP"
+        ]
+      },
+      {
         "name": "dp_flush",
         "wave": "0.|0..1..|1."
       },
@@ -335,6 +346,26 @@
         "gate": null
       },
       {
+        "name": "ch0.CSR status",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.csr[3:0]",
+        "width": 4,
+        "samples": [
+          "0100",
+          "0100",
+          null,
+          "0100",
+          "0100",
+          "0100",
+          "1000",
+          "0000",
+          "0000",
+          null,
+          "0000",
+          "0000"
+        ],
+        "gate": null
+      },
+      {
         "name": "dp_flush",
         "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.dp_flush",
         "width": 1,
@@ -422,7 +453,9 @@
         "6": "6",
         "7": "8",
         "8": "9",
-        "9": "9"
+        "9": "9",
+        "10": "8",
+        "11": "4"
       },
       "data_symbols": [],
       "meaning": "State colors indicate state categories; data colors identify values within one figure. Labels remain authoritative; colors repeat after six distinct data values.",
@@ -438,6 +471,6 @@
       428.5,
       588.5
     ],
-    "source_vcd_sha256": "8da0ba9b250b7dd664dbcb952ad74246fd8fd6c4f879cd4ca31926a491303130"
+    "source_vcd_sha256": "fa373a6a97a414fea6b6b1128afc66b92261a30c5ac2889b91ad4ce4d8022295"
   }
 }

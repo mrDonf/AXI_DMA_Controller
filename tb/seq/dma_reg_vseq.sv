@@ -104,7 +104,7 @@ class dma_reg_vseq extends dma_base_vseq;
       apb_rd(0, 12'hE0C, v);
       if (v != 32'hFFFF) `uvm_error("REGCHK", $sformatf("pclk reset (%0d): S CR3=0x%08h after the reset", k, v))
       apb_rd(1, 12'hE10, v);
-      if (v != 32'hF)    `uvm_error("REGCHK", $sformatf("pclk reset (%0d): NS CR4=0x%08h after the reset", k, v))
+      if (v != 0)        `uvm_error("REGCHK", $sformatf("pclk reset (%0d): NS CR4=0x%08h, RAZ with secure manager expected", k, v))
       apb_rd(0, 12'hFE8, v);
       if (v != 32'h34)   `uvm_error("REGCHK", $sformatf("pclk reset (%0d): periph_id_2=0x%08h after the reset", k, v))
     end

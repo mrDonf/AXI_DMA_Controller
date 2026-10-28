@@ -46,32 +46,64 @@
       "Thread",
       {
         "name": "ch0.state (internal)",
-        "wave": "5.75.....75.75.75.75.75.75.75.75",
+        "wave": "5.785....78578578578578578578578",
         "data": [
           "FET",
           "EX",
+          "UPC",
           "FET",
           "EX",
+          "UPC",
           "FET",
           "EX",
+          "UPC",
           "FET",
           "EX",
+          "UPC",
           "FET",
           "EX",
+          "UPC",
           "FET",
           "EX",
+          "UPC",
           "FET",
           "EX",
+          "UPC",
           "FET",
           "EX",
+          "UPC",
           "FET",
           "EX",
-          "FET"
+          "UPC"
+        ]
+      },
+      {
+        "name": "ch0.CSR status",
+        "wave": "7..87.....87.87.87.87.87.87.87.8",
+        "data": [
+          "RUN",
+          "UPC",
+          "RUN",
+          "UPC",
+          "RUN",
+          "UPC",
+          "RUN",
+          "UPC",
+          "RUN",
+          "UPC",
+          "RUN",
+          "UPC",
+          "RUN",
+          "UPC",
+          "RUN",
+          "UPC",
+          "RUN",
+          "UPC"
         ]
       },
       {
         "name": "ch0.PC",
-        "wave": "5..5......5..5..5..5..5..5..5..5",
+        "wave": "5...5......5..5..5..5..5..5..5..",
         "data": [
           "00010020",
           "00010014",
@@ -81,8 +113,7 @@
           "00010016",
           "00010017",
           "00010018",
-          "0001001a",
-          "A1"
+          "0001001a"
         ]
       },
       {
@@ -107,7 +138,7 @@
           "10000030",
           "10000040",
           "10000050",
-          "A2"
+          "A1"
         ]
       },
       {
@@ -176,7 +207,7 @@
       },
       {
         "name": "wvalid (RDY=1)",
-        "wave": "0...................1.0.....1.0."
+        "wave": "0....................1.0.....1.0"
       },
       {
         "name": "bvalid (RDY=1)",
@@ -188,7 +219,7 @@
     "text": "Build a two-dimensional copy using loops and address arithmetic - 2"
   },
   "foot": {
-    "text": "1 cell = 5 ns; first RIGHT edge = 592.5 ns; | = omitted idle cycles"
+    "text": "1 cell = 5 ns; first RIGHT edge = 602.5 ns; | = omitted idle cycles"
   },
   "config": {
     "hscale": 1,
@@ -201,11 +232,9 @@
     "exclude_instruction_fetch": true,
     "clock_source": "dma_wave_top.tb.aclk",
     "cycle_ns": 5.0,
-    "first_right_edge_ns": 592.5,
-    "last_right_edge_ns": 747.5,
+    "first_right_edge_ns": 602.5,
+    "last_right_edge_ns": 757.5,
     "right_edge_ns": [
-      592.5,
-      597.5,
       602.5,
       607.5,
       612.5,
@@ -235,7 +264,9 @@
       732.5,
       737.5,
       742.5,
-      747.5
+      747.5,
+      752.5,
+      757.5
     ],
     "idle_gaps": [],
     "omitted_signals": [
@@ -323,15 +354,6 @@
       }
     ],
     "value_labels": {
-      "A1": {
-        "signals": [
-          "ch0.PC"
-        ],
-        "value": "0001001d",
-        "sources": [
-          "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.pc"
-        ]
-      },
       "v1": {
         "signals": [
           "opcode (when EXEC)"
@@ -341,7 +363,7 @@
           "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.op"
         ]
       },
-      "A2": {
+      "A1": {
         "signals": [
           "sar_o"
         ],
@@ -360,35 +382,75 @@
           "1",
           "1",
           "10",
-          "1",
+          "1010",
           "1",
           "1",
           "1",
           "1",
           "1",
           "10",
-          "1",
-          "1",
-          "10",
-          "1",
+          "1010",
           "1",
           "10",
-          "1",
-          "1",
-          "10",
-          "1",
+          "1010",
           "1",
           "10",
-          "1",
-          "1",
-          "10",
-          "1",
+          "1010",
           "1",
           "10",
-          "1",
+          "1010",
           "1",
           "10",
-          "1"
+          "1010",
+          "1",
+          "10",
+          "1010",
+          "1",
+          "10",
+          "1010",
+          "1",
+          "10",
+          "1010"
+        ],
+        "gate": null
+      },
+      {
+        "name": "ch0.CSR status",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.csr[3:0]",
+        "width": 4,
+        "samples": [
+          "0001",
+          "0001",
+          "0001",
+          "0011",
+          "0001",
+          "0001",
+          "0001",
+          "0001",
+          "0001",
+          "0001",
+          "0011",
+          "0001",
+          "0001",
+          "0011",
+          "0001",
+          "0001",
+          "0011",
+          "0001",
+          "0001",
+          "0011",
+          "0001",
+          "0001",
+          "0011",
+          "0001",
+          "0001",
+          "0011",
+          "0001",
+          "0001",
+          "0011",
+          "0001",
+          "0001",
+          "0011"
         ],
         "gate": null
       },
@@ -400,6 +462,7 @@
           "10000000000100000",
           "10000000000100000",
           "10000000000100000",
+          "10000000000100000",
           "10000000000010100",
           "10000000000010100",
           "10000000000010100",
@@ -427,8 +490,7 @@
           "10000000000011000",
           "10000000000011010",
           "10000000000011010",
-          "10000000000011010",
-          "10000000000011101"
+          "10000000000011010"
         ],
         "gate": null
       },
@@ -897,17 +959,17 @@
           "0",
           "0",
           "0",
-          "1",
-          "1",
-          "0",
-          "0",
-          "0",
-          "0",
-          "0",
           "0",
           "1",
           "1",
           "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
           "0"
         ],
         "gate": null
@@ -1080,7 +1142,9 @@
         "6": "6",
         "7": "8",
         "8": "9",
-        "9": "9"
+        "9": "9",
+        "10": "8",
+        "11": "4"
       },
       "data_symbols": [],
       "meaning": "State colors indicate state categories; data colors identify values within one figure. Labels remain authoritative; colors repeat after six distinct data values.",
@@ -1093,9 +1157,9 @@
     "operation": "08_loops",
     "number": 2,
     "source_window_ns": [
-      592.5,
-      752.5
+      602.5,
+      762.5
     ],
-    "source_vcd_sha256": "15e8b4aecbb34431ee7618a6026a7dfd91008fe071fb6019ecf9d66b5c630d6e"
+    "source_vcd_sha256": "cba026c5a03c76f985c67317610ff3a5cecaac14e0a43765b44d93b74c92a861"
   }
 }

@@ -4,9 +4,6 @@
 [Guide index](README.md) · [Background](00_background.md) · [← Previous: 14. Cancel an instruction-cache response safely](14_cache.md) · [Next: 16. Diagnose a precise program fault and an imprecise bus fault →](16_faults.md)
 <!-- /reading-nav -->
 
-
-
-
 ## Purpose
 
 Distinguish cancellation from successful program completion.

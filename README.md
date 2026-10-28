@@ -17,6 +17,13 @@ The `Codex_rtl` fixes add thread-tagged instruction-cache entries, thread-local
 maintenance on DMAWFE invalid / DMAEND / DMAKILL, cancellation of stale fetches,
 and consecutive write bursts without a mandatory idle cycle.
 
+The TRM conformance follow-up fixes load-lock for false conditional stores,
+DMAMOV discontinuity barriers/discard, manager debug during boot execution,
+APB DNS/CNS access rules and precise CCR security faults. It adds valid CR1
+cache profiles, 128-bit swaps on narrow buses, AW pipelining and cache
+hit-under-miss. See [fixes and validation](docs/RTL_SPEC_FIXES.md) and the
+integration profile in [DESIGN_SPEC section 9](docs/DESIGN_SPEC.md#9-phạm-vi-tương-thích-và-giao-diện-tích-hợp).
+
 Industry-grade features beyond the basic DMA-330 behaviour:
 
 * hardware AXI protocol protection (an endian swap the data path cannot do
@@ -29,10 +36,22 @@ Industry-grade features beyond the basic DMA-330 behaviour:
 * optional APB error response (`APB_SLVERR`)
 * elaboration-time parameter checking
 
+## Read the design
+
+Start with the **[DMA-330 illustrated design guide](docs/waveform/operations/README.md)**:
+[background](docs/waveform/operations/00_background.md) →
+[launch](docs/waveform/operations/01_launch.md) →
+[copy and completion](docs/waveform/operations/02_copy.md) →
+[advanced operations](docs/waveform/operations/README.md#2-program-and-synchronize-work).
+Twenty-four short operation walkthroughs include thirty-seven grouped, pastel-colored
+WaveDrom SVGs with matching editable JSON. Images display directly on GitHub;
+click to enlarge. VCD recordings are excluded from the repository.
+
 Documentation (`docs/`):
 
 | Document | Content |
 |---|---|
+| [DMA-330 waveform guide](docs/waveform/operations/README.md) | English background, categorized operation walkthroughs, 37 grouped WaveDrom SVG/JSON pairs, and reproduction instructions |
 | [DESIGN_SPEC.md](docs/DESIGN_SPEC.md) | Design specification (Vietnamese): parameters, ports, architecture, global operation, register map, ISA, software sequences (initialization, transfers, interrupts, fault recovery) |
 | [VERIFICATION_PLAN.md](docs/VERIFICATION_PLAN.md) | Verification plan: strategy, testbench, checkers, SVA, verification items, coverage model, sign-off status |
 | [TESTCASES.md](docs/TESTCASES.md) | Test case specification for every test |
@@ -98,8 +117,8 @@ make cov                                     # regression + merged coverage UCDB
 python run_regression.py -t dma_stress_test -c async --seeds 10 -j 16
 
 python run_mutation.py                       # plant RTL bugs in a copy: old vs new environment
-python run_unit_tests.py                     # 9 directed RTL parameter cases (also run after build)
-python run_unit_tests.py --mutations         # additionally check five planted cache/write bugs
+python run_unit_tests.py                     # 11 directed RTL parameter cases (also run after build)
+python run_unit_tests.py --mutations         # additionally check ten planted cache/write/status bugs
 ```
 
 Speed-ups: one compile, `vopt -j N` parallel code generation, and N
@@ -158,6 +177,11 @@ registers (`ARCH`).
 | dma_security_test | two APB ports, CR3/CR4, NS thread checks (events, peripherals, CCR prot), NS register view, NS-tagged instruction cache |
 
 ## Coverage
+
+The 2026-10-28 thread-status correction adds architectural Updating PC (3)
+and reports Cache miss (2) only for a real per-thread refill. It passed
+150 UVM runs with coverage, 11 directed RTL cases and 10 mutation checks.
+See [thread status validation](docs/THREAD_STATUS_FIXES.md).
 
 The `Codex_rtl` changes passed 150 UVM runs (25 tests, sync/async, seeds 1–3),
 9 directed RTL parameter cases and 5 planted-bug checks. See

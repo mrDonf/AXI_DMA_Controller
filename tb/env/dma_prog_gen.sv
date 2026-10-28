@@ -97,6 +97,19 @@ class dma_prog_gen extends uvm_object;
   static function void emit_ops(dma_job job, dma330_asm a, ref dma_op_t ops[$]);
     int unsigned s_size = 99, s_len = 99, d_size = 99, d_len = 99;
     bit          s_inc = job.src_inc, d_inc = job.dst_inc;
+    // Configure both sides before the first load. Changing a FIXED
+    // destination's size after preloading would discard that data (2.11.3).
+    foreach(ops[i]) begin
+      if(ops[i].kind==OP_LD && s_size==99) begin
+        s_size=ops[i].size; s_len=ops[i].len; s_inc=ops[i].inc;
+      end
+      if(ops[i].kind!=OP_LD && d_size==99) begin
+        d_size=ops[i].size; d_len=ops[i].len; d_inc=ops[i].inc;
+      end
+    end
+    a.dmamov(RD_CCR,dma330_asm::ccr(s_inc,s_size==99 ? 0:s_size,s_len==99 ? 1:s_len+1,
+                                     d_inc,d_size==99 ? 0:d_size,d_len==99 ? 1:d_len+1,
+                                     job.src_prot,job.src_cache,job.dst_prot,job.dst_cache,job.swap));
     foreach (ops[i]) begin
       bit changed = 0;
       if (ops[i].kind == OP_LD) begin
@@ -160,6 +173,13 @@ class dma_prog_gen extends uvm_object;
   // Memory to memory copy of any length / alignment
   static function void build_m2m(dma_job job);
     dma_op_t lds[$], sts[$];
+    // FIXED addresses must be naturally aligned (TRM 2.11.1). Pick a fixed
+    // beat that also divides the requested byte count, so no tail changes
+    // its natural width while residual data is buffered.
+    if(!job.src_inc)
+      while(job.src_size>0 && (job.src%(1<<job.src_size)!=0 || job.nbytes%(1<<job.src_size)!=0)) job.src_size--;
+    if(!job.dst_inc)
+      while(job.dst_size>0 && (job.dst%(1<<job.dst_size)!=0 || job.nbytes%(1<<job.dst_size)!=0)) job.dst_size--;
     split(job.src, job.nbytes, job.src_size, job.src_beats, job.src_inc, OP_LD, lds, job.cross_4k);
     split(job.dst, job.nbytes, job.dst_size, job.dst_beats, job.dst_inc, OP_ST, sts, job.cross_4k);
     interleave(lds, sts, job.ops);
@@ -171,6 +191,8 @@ class dma_prog_gen extends uvm_object;
 
   // Zero fill with DMASTZ
   static function void build_fill(dma_job job);
+    if(!job.dst_inc)
+      while(job.dst_size>0 && (job.dst%(1<<job.dst_size)!=0 || job.nbytes%(1<<job.dst_size)!=0)) job.dst_size--;
     split(job.dst, job.nbytes, job.dst_size, job.dst_beats, job.dst_inc, OP_STZ, job.ops, job.cross_4k);
     job.prog.dmamov(RD_DAR, job.dst);
     emit_ops(job, job.prog, job.ops);

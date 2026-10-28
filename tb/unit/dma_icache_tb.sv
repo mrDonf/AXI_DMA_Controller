@@ -10,6 +10,7 @@ module dma_icache_tb;
   logic [31:0] req_addr [NT];
   logic [LW-1:0] resp_data;
   logic resp_err, resp_retry, idle;
+  logic [NT-1:0] refill_pending;
   logic ar_valid, ar_ready = 0, r_valid = 0, r_ready, r_last = 0;
   logic [31:0] ar_addr;
   logic [7:0] ar_len;
@@ -31,6 +32,7 @@ module dma_icache_tb;
     req_addr[t] = 32'h1000;
     req_ns[t] = ns;
     step();
+    if (refill_pending != 0) $fatal(1, "lookup incorrectly reported as refill");
   endtask
   task result(int t, int marker, bit retry = 0, bit err = 0);
     for (int n = 0; n < 100 && !resp_valid[t]; n++) begin
@@ -39,6 +41,7 @@ module dma_icache_tb;
     end
     if (resp_valid !== (NT'(1) << t) || resp_retry !== retry || resp_err !== err)
       $fatal(1, "response t%0d: valid=%b retry=%b err=%b", t, resp_valid, resp_retry, resp_err);
+    if (refill_pending != 0) $fatal(1, "refill remained pending at response");
     if (!retry && !err && resp_data !== line_value(marker))
       $fatal(1, "stale/wrong line t%0d: %h", t, resp_data);
     req[t] = 0;
@@ -49,6 +52,7 @@ module dma_icache_tb;
     if (!ar_valid || ar_addr != 32'h1000 || ar_len != BEATS-1 ||
         ar_size != $clog2(DATA_W/8) || ar_prot != {1'b1, req_ns[t], 1'b1})
       $fatal(1, "missing/incorrect refill AR");
+    if (refill_pending !== (NT'(1) << t)) $fatal(1, "wrong refill owner");
     // -2 invalidates a refill whose AR is stalled; it must still drain.
     if (cancel_beat == -2) begin
       inv[t] = 1;
@@ -109,6 +113,28 @@ module dma_icache_tb;
     begin_req(0); refill(0, 0, -1, 1); result(0, 0, 0, 1);
     begin_req(0); refill(0, 16'h6600); result(0, 16'h6600);
     begin_req(0, 1); refill(0, 16'h7700); result(0, 16'h7700);
+    // A warm thread must hit while another thread's AR/R is stalled.
+    invalidate(1); begin_req(1); refill(1,16'h8800); result(1,16'h8800);
+    invalidate(0); begin_req(0);
+    for(int n=0;n<20 && !ar_valid;n++) step();
+    if(!ar_valid) $fatal(1,"no cold refill for hit-under-miss test");
+    req[1]=1; req_addr[1]=32'h1000; req_ns[1]=0;
+    step();
+    if(!resp_valid[1] || resp_data!==line_value(16'h8800) || resp_err || resp_retry)
+      $fatal(1,"cached thread blocked by stalled refill AR");
+    req[1]=0; step(); ar_ready=1; step(); ar_ready=0;
+    req[1]=1; step();
+    if(!resp_valid[1] || resp_data!==line_value(16'h8800))
+      $fatal(1,"cached thread blocked by stalled refill R");
+    req[1]=0; step();
+    for(int b=0;b<BEATS;b++) begin
+      r_valid=1; r_data=DATA_W'(16'h9900+b); r_last=(b==BEATS-1);
+      if(r_last) req[1]=1; // refill has priority on the shared response port
+      step();
+    end
+    r_valid=0; r_last=0;
+    if(resp_valid !== NT'(1)) $fatal(1,"refill/hit response collision");
+    result(0,16'h9900); result(1,16'h8800);
     $display("UNIT TEST PASSED: dma_icache_tb DATA_W=%0d BEATS=%0d", DATA_W, BEATS);
     $finish;
   end

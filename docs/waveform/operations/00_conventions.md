@@ -4,7 +4,7 @@
 
 ## One operation, one or two pictures
 
-The guide contains twenty named operations and thirty illustrations. Choose a topic from the [categorized operation index](README.md). VCDs and the superseded exhaustive gallery are kept locally and are not published.
+The guide contains twenty-four named operations and thirty-seven illustrations. Choose a topic from the [categorized operation index](README.md). VCDs and the superseded exhaustive gallery are kept locally and are not published.
 
 Each operation starts with the purpose, starting configuration and a minimal program sketch. Read the numbered explanation, then use the picture and its short milestone table to follow the mechanism. A second picture is a deliberate comparison, such as read-side versus write-side page splitting; it is not simply the next arbitrary slice of a long simulation.
 
@@ -30,9 +30,9 @@ Colors use the standard WaveDrom default-skin bus symbols `2..9`, as demonstrate
 | FET (FETCH), addresses | Pastel blue `#b9e0ff` | `5` |
 | EX (EXEC), store opcode | Soft green `#cdfdc5` | `7` |
 | WFE / WFP | Pale amber `#ffffb4` | `3` |
-| BAR (BARRIER), memory barrier opcode | Soft peach `#ffe0b9` | `4` |
+| BAR (BARRIER), CFG (reconfiguration), memory barrier opcode | Soft peach `#ffe0b9` | `4` |
 | END / completion, event notification | Pale cyan `#ccfdfe` | `6` |
-| KILL, loop counters/control | Light lavender `#f0c1fb` | `8` |
+| UPC (Updating PC), KILL, loop counters/control | Light lavender `#f0c1fb` | `8` |
 | FC / FLT, nonzero fault register | Soft rose `#f5c2c0` | `9` |
 
 Payload words use a separate six-color identity cycle: blue, cyan, green, lavender, peach, amber. The same full-width value has the **same color on RDATA and WDATA within a picture**, including when one occurrence uses a short D label and another prints the full value. Colors repeat after six distinct values; the D labels and decoded values remain the identity reference. Payload never uses the fault-rose color. A green payload cell therefore identifies data; it does not declare success.

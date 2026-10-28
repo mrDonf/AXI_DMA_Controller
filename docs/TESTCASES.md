@@ -62,7 +62,7 @@ make sim TEST=<test> CFG=sync|async SEED=<n>      # một test
 make gui TEST=<test> CFG=async                      # có waveform
 python run_regression.py -t <test> -c sync async --seeds 5 -j 8
 python run_unit_tests.py                     # independent of UVM; also runs after regression build
-python run_unit_tests.py --mutations         # baseline cases + five expected mutation failures
+python run_unit_tests.py --mutations         # baseline cases + ten expected mutation failures
 ```
 
 ---
@@ -74,8 +74,9 @@ python run_unit_tests.py --mutations         # baseline cases + five expected mu
 | `dma_icache_tb` | (DATA_W, BEATS) = (32,2), (64,1), (64,4), (128,4); 3 thread, 3 line | Cùng PC khác thread, invalidate riêng thread, invalidate đúng cạnh lookup hit, AR bị stall, từng beat R và RLAST, lỗi refill, retry không cấp phát lại line cũ, tag NS |
 | `dma_fetch_unit_tb` | LINE_BYTES = 8, 32 | Invalidate khi hit/miss/response; lệnh vắt line; retry từ cache; kill/restart đổi PC trước response lỗi cũ |
 | `dma_wr_engine_tb` | DATA_W = 32, 64, 128 | Burst một beat liên tiếp; trừ pop hiện tại khi xét burst kế; swap nhóm rộng hơn beat; handover giữa các kênh; W xong trước AW; AW/W ổn định khi bị stall |
+| `dma_thread_status_tb` | MANAGER = 0, 1 | DSR/CSR mã 3 đúng pha tính/commit PC; PC tuần tự, nhánh vòng lặp và wakeup; local-buffer/shared-cache hit không báo mã 2; AR/R stall giữ mã 2 đúng thread; END giữ PC; register kết thúc đúng |
 
-`run_unit_tests.py --mutations` tạo bản sao dưới `sim/logs/unit/mutations`, khôi phục lần lượt năm lỗi và yêu cầu đúng checker tương ứng phát hiện. RTL đang làm việc không bị sửa. Test không có UVM report marker, không có `UNIT TEST PASSED`, hoặc có simulator/SVA error đều bị đánh FAIL bởi runner tương ứng.
+Ma trận hiện tại có 11 cấu hình. `run_unit_tests.py --mutations` tạo bản sao dưới `sim/logs/unit/mutations`, khôi phục lần lượt 10 lỗi và yêu cầu đúng checker tương ứng phát hiện; bốn lỗi mới là ẩn Updating PC và báo nhầm Cache miss ở channel/manager. RTL đang làm việc không bị sửa. Test không có UVM report marker, không có `UNIT TEST PASSED`, hoặc có simulator/SVA error đều bị đánh FAIL bởi runner tương ứng.
 
 ## 2. Bảng tổng hợp
 
@@ -641,6 +642,30 @@ Giai đoạn 2: reset với `boot_manager_ns = 1`.
 | 16 | Qua cổng NS: manager `DMASEV E3` | `irq[3]`, không lỗi |
 
 ---
+
+## 3.26 TRM conformance follow-up (v1.7)
+
+Trạng thái và lệnh chạy hiện tại ở [RTL_SPEC_FIXES.md](RTL_SPEC_FIXES.md).
+Một số mô tả security/mutation ở các mục lịch sử phía trên thuộc contract cũ:
+v1.7 dùng debug register chung write-only, NS access theo DNS/CNS đúng các
+bảng TRM, và lỗi security CCR xảy ra tại MOV thay vì LD/ST.
+
+`tb/review/dma_spec_review_pkg.sv`, chạy bằng `sim/run_spec_review.py`, kiểm tra
+14 scenario trên sync/async và full core DATA_W 32/64/128:
+
+| Nhóm | Scenario / kết quả được kiểm tra |
+|---|---|
+| Discontinuity | alignment; reconfig_fields (10 biến thể); source_barrier; destination_barrier; retain/discard và commit sau R/B |
+| Security | ccr_security precise CPC và chặn side effect; ns_debug bị bỏ qua với DNS=0 |
+| Manager | manager_debug; manager_resume GO/SEV giữ PC; manager_stalled kill và late refill |
+| Load-lock | false_store_lock; false_store_lock_control; lockup_wait theo điều kiện mọi channel đang chạy |
+| Data/configuration | wide_swap 128 bit qua 4 KB trên mọi bus; cache_crossline ba line 4 byte; negative CR1 profile |
+
+Unit matrix 15 cấu hình thêm hit-under-miss AR/R và collision RLAST, các đường
+retry/kill/invalidate/error của third-line fetch, swap 128 bit với stalls,
+reservation khi AW đi trước W. Write latency benchmark yêu cầu 64 beat ghi
+liên tiếp khi dữ liệu sẵn và latency địa chỉ đã được che. Mười unit mutation
+vẫn phải bị phát hiện.
 
 ## 4. Thêm test mới
 

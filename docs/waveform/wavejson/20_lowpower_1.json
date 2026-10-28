@@ -60,7 +60,15 @@
         "name": "APB.pwrite",
         "wave": "0..1.0.....|0."
       }
-    ]
+    ],
+    {
+      "name": "ch0.CSR status",
+      "wave": "2..........|2.",
+      "data": [
+        "STOP",
+        "STOP"
+      ]
+    }
   ],
   "head": {
     "text": "Accept sleep and wake the DMA for an APB access - 1"
@@ -430,6 +438,28 @@
           "0"
         ],
         "gate": null
+      },
+      {
+        "name": "ch0.CSR status",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.csr[3:0]",
+        "width": 4,
+        "samples": [
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          null,
+          "0000",
+          "0000"
+        ],
+        "gate": null
       }
     ],
     "note": "Asynchronous pins are cycle snapshots; exact acceptance times are in the operation table and original VCD.",
@@ -479,7 +509,9 @@
         "6": "6",
         "7": "8",
         "8": "9",
-        "9": "9"
+        "9": "9",
+        "10": "8",
+        "11": "4"
       },
       "data_symbols": [],
       "meaning": "State colors indicate state categories; data colors identify values within one figure. Labels remain authoritative; colors repeat after six distinct data values.",
@@ -495,6 +527,6 @@
       192.5,
       352.5
     ],
-    "source_vcd_sha256": "ac825dc49aa8206854f750c4d21606fb2203f4fa3e044ac08eb5ff147d3bb519"
+    "source_vcd_sha256": "14b0504f4d5899472a7ad306af5ba3f3a03544820bb03becbfe3b2f3c9137981"
   }
 }

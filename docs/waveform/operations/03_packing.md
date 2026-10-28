@@ -4,9 +4,6 @@
 [Guide index](README.md) · [Background](00_background.md) · [← Previous: 2. Copy a four-beat memory burst and report completion](02_copy.md) · [Next: 4. Copy between different byte alignments →](04_unaligned.md)
 <!-- /reading-nav -->
 
-
-
-
 ## Purpose
 
 See why source and destination beat counts can differ while the byte stream is preserved.
@@ -43,14 +40,14 @@ Group brackets separate the thread, shared storage and active interfaces. Inacti
 
 [Open SVG at full size](../svg/03_packing_1.svg) | [WaveDrom JSON](../wavejson/03_packing_1.json)
 
-Source: `direct_pack`. Core/unit cycle snapshots cover the selected **387.5..547.5 ns** interval. The first cell's right sampling edge is **387.5 ns**.
+Source: `direct_pack`. Core/unit cycle snapshots cover the selected **392.5..552.5 ns** interval. The first cell's right sampling edge is **392.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
-| 407.5 | AR accepted | ID=0; address=0x10000000; 16 beats x 1 B; INCR |
+| 412.5 | AR accepted | ID=0; address=0x10000000; 16 beats x 1 B; INCR |
 | 492.5 | RLAST accepted | RESP=0 |
 | 502.5 | AW accepted | ID=0; address=0x20000000; 2 beats x 8 B; INCR |
-| 507.5 | WLAST accepted | WSTRB=0xff |
+| 512.5 | WLAST accepted | WSTRB=0xff |
 | 517.5 | B response accepted | RESP=0 |
 | 537.5 | IRQ bitmap | 0x1 |
 
@@ -71,13 +68,13 @@ Useful constant context: `AR.ready=1 (no back-pressure)`; `AR.len=0f`; `AW.ready
 
 [Open SVG at full size](../svg/03_packing_2.svg) | [WaveDrom JSON](../wavejson/03_packing_2.json)
 
-Source: `direct_unpack`. Core/unit cycle snapshots cover the selected **387.5..547.5 ns** interval. The first cell's right sampling edge is **387.5 ns**.
+Source: `direct_unpack`. Core/unit cycle snapshots cover the selected **392.5..552.5 ns** interval. The first cell's right sampling edge is **392.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
-| 407.5 | AR accepted | ID=0; address=0x10000000; 2 beats x 8 B; INCR |
+| 412.5 | AR accepted | ID=0; address=0x10000000; 2 beats x 8 B; INCR |
 | 422.5 | RLAST accepted | RESP=0 |
-| 437.5 | AW accepted | ID=0; address=0x20000000; 16 beats x 1 B; INCR |
+| 432.5 | AW accepted | ID=0; address=0x20000000; 16 beats x 1 B; INCR |
 | 512.5 | WLAST accepted | WSTRB=0x80 |
 | 517.5 | B response accepted | RESP=0 |
 | 537.5 | IRQ bitmap | 0x1 |

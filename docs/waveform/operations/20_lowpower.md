@@ -1,11 +1,8 @@
 # Accept sleep and wake the DMA for an APB access
 
 <!-- reading-nav -->
-[Guide index](README.md) · [Background](00_background.md) · [← Previous: 19. Pass a peripheral request across unrelated clocks](19_cdc.md) · [Next: validation →](99_validation.md)
+[Guide index](README.md) · [Background](00_background.md) · [← Previous: 19. Pass a peripheral request across unrelated clocks](19_cdc.md) · [Next: 21. Distinguish execution, PC calculation and a real cache refill →](21_thread_phases.md)
 <!-- /reading-nav -->
-
-
-
 
 ## Purpose
 
@@ -72,5 +69,5 @@ For source tests, reproduction commands and validation scope, see [Reproduction 
 ---
 
 <!-- reading-nav -->
-[Guide index](README.md) · [Background](00_background.md) · [← Previous: 19. Pass a peripheral request across unrelated clocks](19_cdc.md) · [Next: validation →](99_validation.md)
+[Guide index](README.md) · [Background](00_background.md) · [← Previous: 19. Pass a peripheral request across unrelated clocks](19_cdc.md) · [Next: 21. Distinguish execution, PC calculation and a real cache refill →](21_thread_phases.md)
 <!-- /reading-nav -->

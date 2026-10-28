@@ -20,8 +20,8 @@
 //   0x400+0x20n SARn/DARn/CCRn/LC0_n/LC1_n  RO
 //   0xD00 DBGSTATUS      RO  bit0: debug instruction busy
 //   0xD04 DBGCMD         WO  write 0 to execute DBGINST0/1
-//   0xD08 DBGINST0       RW  [0] thread (0 mgr / 1 ch), [10:8] ch, [31:16] byte0..1
-//   0xD0C DBGINST1       RW  bytes 2..5
+//   0xD08 DBGINST0       WO  [0] thread (0 mgr / 1 ch), [10:8] ch, [31:16] byte0..1
+//   0xD0C DBGINST1       WO  bytes 2..5
 //   0xE00..0xE14 CR0-4, CRD   RO  configuration (CR3 / CR4: event / peripheral security)
 //   0xE80 WD             RW  watchdog: [0] irq_only, [31:16] timeout (x256 clk)
 //   0xE84 WDSTAT         W1C channel lock-up detected (bit per channel) (extension)
@@ -29,15 +29,12 @@
 //
 // Security
 //   * The secure port sees and controls everything.
-//   * The non-secure port sees only non-secure resources: the manager when
-//     DSR.DNS = 1, channel n when CSRn.CNS = 1, event e when CR3[e] = 1.
-//     Registers (or bits) of secure resources read as zero and ignore writes
-//     (no PSLVERR). WD is secure only; WDSTAT shows / clears the bits of the
-//     non-secure channels. CR0-4, CRD, DBGSTATUS and the ID registers read the
-//     same on both ports.
-//   * Each port has its own DBGINST0/1, so one world cannot change a debug
-//     instruction the other world is about to issue. A debug instruction from
-//     the non-secure port is ignored when its target thread is secure.
+//   * DNS gates NS access to control/fault/debug/configuration/WD registers
+//     (TRM Tables 3-1, 3-4, 3-5); CNS gates channel state/AXI/loop registers.
+//     CR3/CR4 gate thread instructions, not the NS view of control registers.
+//     ID registers are always visible. WDSTAT is a channel-filtered extension.
+//   * Both ports share write-only DBGINST0/1. Busy writes are ignored, and a
+//     manager command is latched at DBGCMD, independent of later writes.
 //   * CR3 / CR4 are taken from boot_irq_ns / boot_periph_ns once after reset.
 //
 // Both ports are zero-wait-state except when they access in the same cycle:
@@ -258,35 +255,33 @@ module dma_regs
   // TRM Table 3-1: on the non-secure port the manager registers (DSR, DPC,
   // FSRD, FTRD) and the interrupt / fault summary registers (INTEN,
   // INT_EVENT_RIS, INTMIS, INTCLR, FSRC) read as zero / ignore writes while
-  // the manager is secure. With a non-secure manager they are further
-  // limited to the non-secure events (CR3) and channels (CNS). The registers
-  // of one channel follow that channel's CNS.
+  // the manager is secure. With a non-secure manager the complete control
+  // registers are visible (Tables 3-1, 3-4, 3-5). Channel state/AXI registers
+  // independently follow CNS (Tables 3-2, 3-3).
   assign mgr_vis = !acc_n || dsr[9];                  // DSR.DNS
   assign ch_vis  = acc_n ? ch_ns  : '1;
-  assign ev_vis  = acc_n ? (dsr[9] ? irq_ns : '0) : '1;
+  assign ev_vis  = {NUM_EVENTS{mgr_vis}};
 
   //----------------------------------------------------------------------------
   // Writable registers
   //----------------------------------------------------------------------------
-  logic [31:0] dbg_inst0, dbg_inst1, dbg_inst0_ns, dbg_inst1_ns, wd_reg;
+  logic [31:0] dbg_inst0, dbg_inst1, wd_reg;
+  logic              dbg_mgr_busy;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       inten        <= '0;
       dbg_inst0    <= '0;
       dbg_inst1    <= '0;
-      dbg_inst0_ns <= '0;
-      dbg_inst1_ns <= '0;
       wd_reg       <= '0;
     end else if (wr_en) begin
       case (addr)
         A_INTEN:    inten <= (inten & ~ev_vis) | (wdata[NUM_EVENTS-1:0] & ev_vis);
-        // Reserved bits [15:11] and [7:1] are not implemented (read as 0)
-        A_DBGINST0: if (acc_n) dbg_inst0_ns <= wdata & 32'hFFFF_0701;
-                    else       dbg_inst0    <= wdata & 32'hFFFF_0701;
-        A_DBGINST1: if (acc_n) dbg_inst1_ns <= wdata;
-                    else       dbg_inst1    <= wdata;
-        A_WD:       if (!acc_n) wd_reg <= wdata & 32'hFFFF_0001;
+        // One write-only debug register bank, visible to NS only with DNS=1.
+        // Writes while the debug interface is busy are ignored (TRM 2.5.1).
+        A_DBGINST0: if (mgr_vis && !dbg_mgr_busy) dbg_inst0 <= wdata & 32'hFFFF_0701;
+        A_DBGINST1: if (mgr_vis && !dbg_mgr_busy) dbg_inst1 <= wdata;
+        A_WD:       if (mgr_vis) wd_reg <= wdata & 32'hFFFF_0001;
         default: ;
       endcase
     end
@@ -306,11 +301,10 @@ module dma_regs
   assign intclr_mask = wdata[NUM_EVENTS-1:0] & ev_vis;
 
   //----------------------------------------------------------------------------
-  // Debug instruction dispatch (DBGINST0/1 of the port that writes DBGCMD)
+  // Debug instruction dispatch (shared DBGINST0/1, DNS gates the NS interface)
   //----------------------------------------------------------------------------
   logic              dbg_go;          // DBGCMD written with "execute"
-  logic              dbg_mgr_busy;
-  logic              dbg_mgr_ns;      // pending manager instruction came from the NS port
+  logic [INSN_W-1:0] dbg_pending_insn;
   logic              dbg_to_ch;
   logic [2:0]        dbg_ch;
   logic [31:0]       dbg_i0;
@@ -318,24 +312,24 @@ module dma_regs
   insn_e             dbg_cls;
   logic              dbg_mgr_ok, dbg_ch_ok;
 
-  assign dbg_i0    = acc_n ? dbg_inst0_ns : dbg_inst0;
-  assign dbg_insn  = acc_n ? {dbg_inst1_ns, dbg_inst0_ns[31:16]} : {dbg_inst1, dbg_inst0[31:16]};
+  assign dbg_i0    = dbg_inst0;
+  assign dbg_insn  = {dbg_inst1, dbg_inst0[31:16]};
   assign dbg_ch    = dbg_i0[10:8];
   assign dbg_to_ch = dbg_i0[0];
   assign dbg_cls   = decode_op(dbg_insn[7:0]);
   assign dbg_go    = wr_en && (addr == A_DBGCMD) && (wdata[1:0] == 2'b00) && !dbg_mgr_busy;
 
-  // The non-secure port may only drive non-secure threads
+  // DNS gates the complete NS debug interface, including channel commands.
   assign dbg_mgr_ok = !acc_n || dsr[9];
-  assign dbg_ch_ok  = (int'(dbg_ch) < NUM_CH) && (!acc_n || ch_ns[dbg_ch]);
+  assign dbg_ch_ok  = (int'(dbg_ch) < NUM_CH) && dbg_mgr_ok;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       dbg_mgr_busy <= 1'b0;
-      dbg_mgr_ns   <= 1'b0;
+      dbg_pending_insn <= '0;
     end else if (dbg_go && !dbg_to_ch && dbg_mgr_ok) begin
       dbg_mgr_busy <= 1'b1;
-      dbg_mgr_ns   <= acc_n;
+      dbg_pending_insn <= dbg_insn;
     end else if (mgr_dbg_done) begin
       dbg_mgr_busy <= 1'b0;
     end
@@ -343,8 +337,7 @@ module dma_regs
 
   assign mgr_dbg_valid = dbg_mgr_busy;
   assign dbg_busy      = dbg_mgr_busy;
-  assign mgr_dbg_insn  = dbg_mgr_ns ? {dbg_inst1_ns, dbg_inst0_ns[31:16]}
-                                    : {dbg_inst1, dbg_inst0[31:16]};
+  assign mgr_dbg_insn  = dbg_pending_insn;
 
   // Channel-thread debug instructions take effect immediately. A DMASEV of a
   // secure event to a non-secure channel faults it (ch_evnt_err), as the same
@@ -413,26 +406,24 @@ module dma_regs
       A_RIS:       rdata = 32'(ev_flag & ev_vis);
       A_INTMIS:    rdata = 32'(ev_flag & inten & ev_vis);
       A_FSRD:      rdata = {31'd0, mgr_vis && mgr_faulting};
-      A_FSRC:      rdata = mgr_vis ? 32'(ch_faulting & ch_vis) : '0;
+      A_FSRC:      rdata = mgr_vis ? 32'(ch_faulting) : '0;
       A_FTRD:      rdata = mgr_vis ? ftrd : '0;
-      A_DBGSTATUS: rdata = {31'd0, dbg_mgr_busy};
-      A_DBGINST0:  rdata = acc_n ? dbg_inst0_ns : dbg_inst0;
-      A_DBGINST1:  rdata = acc_n ? dbg_inst1_ns : dbg_inst1;
-      A_CR0:       rdata = cr0;
-      A_CR1:       rdata = cr1;
-      A_CR2:       rdata = boot_addr;
-      A_CR3:       rdata = 32'(irq_ns);
-      A_CR4:       rdata = 32'(periph_ns);
-      A_CRD:       rdata = crd;
-      A_WD:        rdata = acc_n ? '0 : wd_reg;
+      A_DBGSTATUS: rdata = {31'd0, mgr_vis && dbg_mgr_busy};
+      A_CR0:       rdata = mgr_vis ? cr0 : '0;
+      A_CR1:       rdata = mgr_vis ? cr1 : '0;
+      A_CR2:       rdata = mgr_vis ? boot_addr : '0;
+      A_CR3:       rdata = mgr_vis ? 32'(irq_ns) : '0;
+      A_CR4:       rdata = mgr_vis ? 32'(periph_ns) : '0;
+      A_CRD:       rdata = mgr_vis ? crd : '0;
+      A_WD:        rdata = mgr_vis ? wd_reg : '0;
       A_WDSTAT:    rdata = 32'(wd_stat & ch_vis);
       default: ;
     endcase
 
     // Per-channel registers
     for (int n = 0; n < NUM_CH; n++) begin
+      if (mgr_vis && addr == A_FTR0 + 12'(4 * n)) rdata = ch_ftr[n];
       if (ch_vis[n]) begin
-        if (addr == A_FTR0 + 12'(4 * n))        rdata = ch_ftr[n];
         if (addr == A_FAR0 + 12'(4 * n))        rdata = ch_far[n];
         if (addr == A_CSR0 + 12'(8 * n))        rdata = ch_csr[n];
         if (addr == A_CSR0 + 12'(8 * n + 4))    rdata = ch_cpc[n];

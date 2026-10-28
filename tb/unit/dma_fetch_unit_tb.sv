@@ -113,6 +113,40 @@ module dma_fetch_unit_tb;
     restart(); fetch_req = 0; step();
     respond({LINE_BYTES{8'h18}}); no_result();
     fetch_req = 1; wait_req(); respond('0); expect_insn(8'h00);
+    if (LINE_BYTES == 4) begin
+      // Third-line assembly, retry, invalidation, late kill and bus error.
+      for (int mode=0; mode<5; mode++) begin
+        restart(); pc=32'h1003;
+        respond(32'hBC000000); wait_req();
+        respond(32'h33221100); wait_req();
+        if(ic_addr != 32'h1008) $fatal(1,"missing third line");
+        case(mode)
+          1: begin
+            respond('1,1); no_result(); wait_req();
+            respond(32'h33221100); wait_req();
+          end
+          2: begin
+            inv=1; respond('1); no_result(); inv=0;
+            wait_req(); respond(32'hBC000000); wait_req();
+            respond(32'h33221100); wait_req();
+          end
+          3: begin
+            fetch_req=0; step(); respond('1,0,1); no_result();
+            fetch_req=1; wait_req(); respond(32'h33221100); wait_req();
+          end
+          4: begin
+            respond('1,0,1);
+            if(!fetch_err || insn_valid) $fatal(1,"third-line bus error not reported");
+            fetch_req=0; step(); continue;
+          end
+          default: ;
+        endcase
+        respond(32'h00000044);
+        if(!insn_valid || insn !== 48'h4433221100BC)
+          $fatal(1,"third-line assembly mode %0d: %h",mode,insn);
+        fetch_req=0; step();
+      end
+    end
     // ... also when fetch_req drops on the response edge itself
     restart(); fetch_req = 0; respond({LINE_BYTES{8'h18}}); no_result();
     fetch_req = 1; wait_req(); respond('0); expect_insn(8'h00);

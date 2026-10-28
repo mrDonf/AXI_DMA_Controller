@@ -4,9 +4,6 @@
 [Guide index](README.md) · [Background](00_background.md) · [← Previous: 1. Launch a channel through the APB debug interface](01_launch.md) · [Next: 3. Pack and unpack between different beat widths →](03_packing.md)
 <!-- /reading-nav -->
 
-
-
-
 ## Purpose
 
 Follow one load/store pair through the MFIFO, AXI response and completion event.
@@ -46,14 +43,14 @@ Group brackets separate the thread, shared storage and active interfaces. Inacti
 
 [Open SVG at full size](../svg/02_copy_1.svg) | [WaveDrom JSON](../wavejson/02_copy_1.json)
 
-Source: `direct_copy32`. Core/unit cycle snapshots cover the selected **387.5..537.5 ns** interval. The first cell's right sampling edge is **387.5 ns**.
+Source: `direct_copy32`. Core/unit cycle snapshots cover the selected **392.5..542.5 ns** interval. The first cell's right sampling edge is **392.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
-| 407.5 | AR accepted | ID=0; address=0x10000000; 4 beats x 8 B; INCR |
+| 412.5 | AR accepted | ID=0; address=0x10000000; 4 beats x 8 B; INCR |
 | 432.5 | RLAST accepted | RESP=0 |
 | 442.5 | AW accepted | ID=0; address=0x20000000; 4 beats x 8 B; INCR |
-| 457.5 | WLAST accepted | WSTRB=0xff |
+| 462.5 | WLAST accepted | WSTRB=0xff |
 | 467.5 | B response accepted | RESP=0 |
 | 487.5 | IRQ bitmap | 0x1 |
 

@@ -22,13 +22,14 @@ module dma_wr_engine_tb;
   logic [DATA_W-1:0] m_wdata;
   logic [NB-1:0] m_wstrb;
   logic m_bvalid = 0, m_bready;
-  logic [NUM_CH-1:0] wr_busy, wr_active, store_pending, wr_err;
+  logic [NUM_CH-1:0] wr_busy, wr_active, store_pending, wr_err, wr_beat;
   logic [31:0] wr_err_addr;
   logic ack_valid, ack_ready = 1, ack_burst;
   logic [4:0] ack_periph;
   int supply [NUM_CH], offset [NUM_CH];
   int cycle = 0, writes = 0, last_write = -1;
   bit consecutive = 0, zeros = 1, grouped = 0;
+  bit wide_grouped = 0;
   logic [DATA_W-1:0] expected_data;
   logic [NB-1:0] expected_strb;
   dma_wr_engine #(.NUM_CH(NUM_CH), .DATA_W(DATA_W), .ID_W(ID_W),
@@ -44,6 +45,13 @@ module dma_wr_engine_tb;
       for (int k = 0; k < 2; k++)
         expected_data[((writes % (NB/2))*2+k)*8 +: 8] =
           8'(offset[mf_pop_ch] + NB-1 - (writes % (NB/2))*2-k);
+    end
+    if (wide_grouped) begin
+      expected_data = '0;
+      expected_strb = NB'(3 << ((writes*2)%NB));
+      for (int k=0;k<2;k++)
+        expected_data[(((writes*2)%NB)+k)*8 +: 8] =
+          8'((writes/8)*16 + 15 - (writes%8)*2-k);
     end
   end
   always @(posedge clk) begin
@@ -74,7 +82,7 @@ module dma_wr_engine_tb;
   task step(); @(posedge clk); #1; endtask
   task reset_case(bit zero_data);
     rst_n = 0; wq_push = 0; ch_flush = 0; m_wready = 0; m_awready = 1;
-    consecutive = 0; zeros = zero_data; grouped = 0;
+    consecutive = 0; zeros = zero_data; grouped = 0; wide_grouped = 0;
     foreach (supply[c]) supply[c] = 0;
     repeat (2) step(); rst_n = 1; step();
   endtask
@@ -137,6 +145,18 @@ module dma_wr_engine_tb;
     repeat (3) begin step(); if (!m_awvalid || m_awaddr != 32'h4000 || m_wvalid)
       $fatal(1, "pending AW lost when W finished first"); end
     m_awready = 1; wait_writes(2);
+    // A 128-bit natural group is legal on every supported data-bus width.
+    // Two groups, narrow beats, random-like AW/W stalls and MFIFO accounting.
+    reset_case(0); wide_grouped=1;
+    supply[0]=32; step(); supply[0]=0;
+    wq_data[0]='0; wq_data[0].addr=32'h6000;
+    wq_data[0].len=15; wq_data[0].size=1; wq_data[0].inc=1;
+    wq_data[0].bytes=32; wq_data[0].swap=4;
+    wq_push[0]=1; step(); wq_push=0;
+    for(int n=0;n<300 && writes<16;n++) begin
+      m_awready=(n%5)!=0; m_wready=(n%4)!=0; step();
+    end
+    if(writes!=16 || mf_count[0]!=0) $fatal(1,"128-bit endian groups did not drain exactly");
     $display("UNIT TEST PASSED: dma_wr_engine_tb DATA_W=%0d", DATA_W);
     $finish;
   end

@@ -307,11 +307,14 @@ static void test_endian(void)
     CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 7), "FIXED beat narrower than the swap faults");
     dma330_free(m);
 
-    /* swap wider than the 8-byte bus: configuration limit */
+    /* Table 3-22: swap can be wider than the AXI bus. */
     m = new_model(); p.n = 0;
     p_mov(&p, 0, 0x1000); p_mov(&p, 2, 0x2000); p_mov(&p, 1, ccr(1, 3, 2, 1, 3, 2, 4));
     p_ld(&p, 0); p_st(&p, 0); p_end(&p);
-    CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 7), "128-bit swap on a 64-bit bus faults");
+    CHECK(run(m, &p) == DM_EV_END, "128-bit swap on a 64-bit bus is legal");
+    st = nth(DM_EV_ST, 0);
+    for (k=0;k<16;k++)
+        CHECK(st && st->data[k/8][k%8] == mem_byte(0x1000+15-k), "128-bit swap byte %u",k);
     dma330_free(m);
 
     /* DAR not aligned to the swap group */
@@ -617,11 +620,12 @@ static void test_security(void)
     CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 6), "NS thread, DMAWFP P2 (secure): ch_periph_err");
     p.n = 0; p_flushp(&p, 3);
     CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 6), "NS thread, DMAFLUSHP P3: ch_periph_err");
-    p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 1, ccr(1, 3, 1, 1, 3, 1, 0) | (2u << 8)); p_ldp(&p, 0, 2);
+    p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 1, ccr(1, 3, 1, 1, 3, 1, 0) | (2u << 8) | (2u << 22)); p_ldp(&p, 0, 2);
     CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 6), "NS thread, DMALDP P2: ch_periph_err");
     /* a non-secure thread may not ask for a secure access (prot[1] = 0) */
     p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 1, ccr(1, 3, 1, 1, 3, 1, 0)); p_ld(&p, 0);
     CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 7), "NS thread, secure read: ch_rdwr_err");
+    CHECK(dma330_reg(m, DM_R_PC) == CODE_BASE + 6, "NS security abort is precise at DMAMOV CCR");
     p.n = 0; p_mov(&p, 2, 0x2000); p_mov(&p, 1, ccr(1, 3, 1, 1, 3, 1, 0) | (2u << 8)); p_stz(&p);
     CHECK(run(m, &p) == DM_EV_FAULT && dma330_reg(m, DM_R_FTR) == (1u << 7), "NS thread, secure write: ch_rdwr_err");
     p.n = 0; p_mov(&p, 0, 0x1000); p_mov(&p, 2, 0x2000);

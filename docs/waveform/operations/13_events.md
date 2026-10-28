@@ -4,9 +4,6 @@
 [Guide index](README.md) · [Background](00_background.md) · [← Previous: 12. Select single or burst work and terminate on the final request](12_request_types.md) · [Next: 14. Cancel an instruction-cache response safely →](14_cache.md)
 <!-- /reading-nav -->
 
-
-
-
 ## Purpose
 
 Compare a signal arriving after the wait with a signal already pending before the wait.
@@ -48,7 +45,13 @@ Source: `direct_wait_event`. Core/unit cycle snapshots cover the selected **437.
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
 | 512.5 | WFE hit | 0x1 |
-| 587.5 | AR accepted | ID=0; address=0x10000000; 1 beats x 8 B; INCR |
+| 592.5 | AR accepted | ID=0; address=0x10000000; 1 beats x 8 B; INCR |
+
+Full values for the short labels in this picture (matching D labels mean matching data):
+
+| Label | Signal(s) | Full value |
+|---|---|---|
+| A1 | ch0.PC | `00010015` |
 
 Useful constant context: `arready=1 (no back-pressure)`.
 

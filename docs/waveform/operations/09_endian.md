@@ -4,9 +4,6 @@
 [Guide index](README.md) · [Background](00_background.md) · [← Previous: 8. Build a two-dimensional copy using loops and address arithmetic](08_loops.md) · [Next: 10. Service a memory-to-peripheral request →](10_m2p.md)
 <!-- /reading-nav -->
 
-
-
-
 ## Purpose
 
 Separate the swap group size from the physical AXI beat size.
@@ -32,7 +29,7 @@ DMAWMB
 1. For a four-byte group, 00 01 02 03 becomes 03 02 01 00. Group order is retained.
 2. Actual seeded values are listed below each picture; D labels identify full data words in JSON.
 3. With an eight-byte group and two-byte beats, four W beats consume one reversed group.
-4. Addresses must be group-aligned and write bursts must contain whole groups. The group cannot exceed this implementation's data-bus width.
+4. Addresses must be group-aligned and write bursts must contain whole groups. The current implementation also supports 128-bit groups across narrower beats; see operation 23.
 
 Group brackets separate the thread, shared storage and active interfaces. Inactive interfaces and uninformative constant rows are omitted. A constant needed to explain a stall or security decision stays visible. Pastel state colors distinguish execution, waiting and faults; equal payload values share a color across read/write rows. [WaveDrom conventions and color legend](00_conventions.md) define cell timing, data labels and snapshots.
 
@@ -42,13 +39,13 @@ Group brackets separate the thread, shared storage and active interfaces. Inacti
 
 [Open SVG at full size](../svg/09_endian_1.svg) | [WaveDrom JSON](../wavejson/09_endian_1.json)
 
-Source: `direct_swap32`. Core/unit cycle snapshots cover the selected **387.5..527.5 ns** interval. The first cell's right sampling edge is **387.5 ns**.
+Source: `direct_swap32`. Core/unit cycle snapshots cover the selected **392.5..532.5 ns** interval. The first cell's right sampling edge is **392.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
-| 407.5 | AR accepted | ID=0; address=0x10000000; 2 beats x 8 B; INCR |
+| 412.5 | AR accepted | ID=0; address=0x10000000; 2 beats x 8 B; INCR |
 | 422.5 | RLAST accepted | RESP=0 |
-| 437.5 | AW accepted | ID=0; address=0x20000000; 2 beats x 8 B; INCR |
+| 432.5 | AW accepted | ID=0; address=0x20000000; 2 beats x 8 B; INCR |
 | 442.5 | WLAST accepted | WSTRB=0xff |
 | 447.5 | B response accepted | RESP=0 |
 | 467.5 | IRQ bitmap | 0x1 |
@@ -72,13 +69,13 @@ Useful constant context: `AR.ready=1 (no back-pressure)`; `AR.len=01`; `AW.ready
 
 [Open SVG at full size](../svg/09_endian_2.svg) | [WaveDrom JSON](../wavejson/09_endian_2.json)
 
-Source: `direct_swap64_narrow`. Core/unit cycle snapshots cover the selected **387.5..547.5 ns** interval. The first cell's right sampling edge is **387.5 ns**.
+Source: `direct_swap64_narrow`. Core/unit cycle snapshots cover the selected **392.5..552.5 ns** interval. The first cell's right sampling edge is **392.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
-| 407.5 | AR accepted | ID=0; address=0x10000000; 2 beats x 8 B; INCR |
+| 412.5 | AR accepted | ID=0; address=0x10000000; 2 beats x 8 B; INCR |
 | 422.5 | RLAST accepted | RESP=0 |
-| 437.5 | AW accepted | ID=0; address=0x20000000; 8 beats x 2 B; INCR |
+| 432.5 | AW accepted | ID=0; address=0x20000000; 8 beats x 2 B; INCR |
 | 472.5 | WLAST accepted | WSTRB=0xc0 |
 | 477.5 | B response accepted | RESP=0 |
 | 497.5 | IRQ bitmap | 0x1 |
