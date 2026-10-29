@@ -40,6 +40,8 @@ Group brackets separate the thread, shared storage and active interfaces. Inacti
 
 [Open SVG at full size](../svg/20_lowpower_1.svg) | [WaveDrom JSON](../wavejson/20_lowpower_1.json)
 
+Arm CSR labels: `STOP` = Stopped (`0x0`).
+
 Source: `dma_lowpower_test_sync`. Core/unit cycle snapshots cover the selected **192.5..352.5 ns** interval. The first cell's right sampling edge is **192.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
@@ -50,6 +52,8 @@ Source: `dma_lowpower_test_sync`. Core/unit cycle snapshots cover the selected *
 [![Waveform 2](../svg/20_lowpower_2.svg)](../svg/20_lowpower_2.svg)
 
 [Open SVG at full size](../svg/20_lowpower_2.svg) | [WaveDrom JSON](../wavejson/20_lowpower_2.json)
+
+Arm CSR labels: `STOP` = Stopped (`0x0`); `EXEC` = Executing (`0x1`); `MISS` = Cache miss (`0x2`).
 
 Source: `dma_lowpower_test_sync`. Core/unit cycle snapshots cover the selected **1712.5..1872.5 ns** interval. The first cell's right sampling edge is **1712.5 ns**.
 

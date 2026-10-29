@@ -39,6 +39,8 @@ Group brackets separate the thread, shared storage and active interfaces. Inacti
 
 [Open SVG at full size](../svg/14_cache_1.svg) | [WaveDrom JSON](../wavejson/14_cache_1.json)
 
+
+
 Source: `dma_icache_tb`. Core/unit cycle snapshots cover the selected **275..435 ns** interval. The first cell's right sampling edge is **275 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |

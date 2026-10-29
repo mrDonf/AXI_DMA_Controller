@@ -40,6 +40,8 @@ Group brackets separate the thread, shared storage and active interfaces. Inacti
 
 [Open SVG at full size](../svg/04_unaligned_1.svg) | [WaveDrom JSON](../wavejson/04_unaligned_1.json)
 
+Arm CSR labels: `EXEC` = Executing (`0x1`); `UPC` = Updating PC (`0x3`); `BAR` = At barrier (`0x5`).
+
 Source: `direct_unaligned`. Core/unit cycle snapshots cover the selected **387.5..547.5 ns** interval. The first cell's right sampling edge is **387.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |

@@ -39,6 +39,8 @@ Group brackets separate the thread, shared storage and active interfaces. Inacti
 
 [Open SVG at full size](../svg/09_endian_1.svg) | [WaveDrom JSON](../wavejson/09_endian_1.json)
 
+Arm CSR labels: `STOP` = Stopped (`0x0`); `EXEC` = Executing (`0x1`); `UPC` = Updating PC (`0x3`); `BAR` = At barrier (`0x5`); `COMP` = Completing (`0x9`).
+
 Source: `direct_swap32`. Core/unit cycle snapshots cover the selected **377.5..517.5 ns** interval. The first cell's right sampling edge is **377.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
@@ -68,6 +70,8 @@ Useful constant context: `AR.ready=1 (no back-pressure)`; `AR.len=01`; `AW.ready
 [![Waveform 2](../svg/09_endian_2.svg)](../svg/09_endian_2.svg)
 
 [Open SVG at full size](../svg/09_endian_2.svg) | [WaveDrom JSON](../wavejson/09_endian_2.json)
+
+Arm CSR labels: `STOP` = Stopped (`0x0`); `EXEC` = Executing (`0x1`); `UPC` = Updating PC (`0x3`); `BAR` = At barrier (`0x5`); `COMP` = Completing (`0x9`).
 
 Source: `direct_swap64_narrow`. Core/unit cycle snapshots cover the selected **377.5..537.5 ns** interval. The first cell's right sampling edge is **377.5 ns**.
 

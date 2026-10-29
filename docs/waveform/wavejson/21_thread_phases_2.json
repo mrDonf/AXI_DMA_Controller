@@ -67,19 +67,19 @@
         "wave": "878787.5.......7...87.....8787",
         "data": [
           "UPC",
-          "RUN",
+          "EXEC",
           "UPC",
-          "RUN",
+          "EXEC",
           "UPC",
-          "RUN",
+          "EXEC",
           "MISS",
-          "RUN",
+          "EXEC",
           "UPC",
-          "RUN",
+          "EXEC",
           "UPC",
-          "RUN",
+          "EXEC",
           "UPC",
-          "RUN"
+          "EXEC"
         ]
       },
       {
@@ -731,6 +731,52 @@
       }
     ],
     "note": "Asynchronous pins are cycle snapshots; exact acceptance times are in the operation table and original VCD.",
+    "arm_csr_states": {
+      "0": {
+        "name": "Stopped",
+        "label": "STOP"
+      },
+      "1": {
+        "name": "Executing",
+        "label": "EXEC"
+      },
+      "2": {
+        "name": "Cache miss",
+        "label": "MISS"
+      },
+      "3": {
+        "name": "Updating PC",
+        "label": "UPC"
+      },
+      "4": {
+        "name": "Waiting for event",
+        "label": "WFE"
+      },
+      "5": {
+        "name": "At barrier",
+        "label": "BAR"
+      },
+      "7": {
+        "name": "Waiting for peripheral",
+        "label": "WFP"
+      },
+      "8": {
+        "name": "Killing",
+        "label": "KILL"
+      },
+      "9": {
+        "name": "Completing",
+        "label": "COMP"
+      },
+      "14": {
+        "name": "Faulting completing",
+        "label": "FC"
+      },
+      "15": {
+        "name": "Faulting",
+        "label": "FLT"
+      }
+    },
     "colors": {
       "skin": "default",
       "palette": {

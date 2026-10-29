@@ -40,6 +40,8 @@ Group brackets separate the thread, shared storage and active interfaces. Inacti
 
 [Open SVG at full size](../svg/01_launch_1.svg) | [WaveDrom JSON](../wavejson/01_launch_1.json)
 
+Arm CSR labels: `STOP` = Stopped (`0x0`); `EXEC` = Executing (`0x1`); `MISS` = Cache miss (`0x2`); `UPC` = Updating PC (`0x3`).
+
 Source: `direct_copy8`. Core/unit cycle snapshots cover the selected **205..365 ns** interval. The first cell's right sampling edge is **207.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |

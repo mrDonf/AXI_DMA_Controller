@@ -34,6 +34,8 @@ Group brackets separate the thread, shared storage and active interfaces. Inacti
 
 [Open SVG at full size](../svg/24_ccr_permissions_1.svg) | [WaveDrom JSON](../wavejson/24_ccr_permissions_1.json)
 
+Arm CSR labels: `EXEC` = Executing (`0x1`); `MISS` = Cache miss (`0x2`); `FC` = Faulting completing (`0xe`); `FLT` = Faulting (`0xf`).
+
 Source: `spec_ccr_security`. Core/unit cycle snapshots cover the selected **312.5..462.5 ns** interval. The first cell's right sampling edge is **312.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |

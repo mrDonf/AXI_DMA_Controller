@@ -20,6 +20,26 @@ Copy the complete JSON into the [WaveDrom editor](https://wavedrom.com/editor.ht
 
 The SVG uses WaveDrom's own waveform shapes, buses, group brackets, grid and labels. A white canvas and a source-JSON hash are added to the SVG container; no separate hand-drawn signal paths are used.
 
+## Architectural CSR state names
+
+Arm DDI 0424D section 3.3.11 names CSR status 1 **Executing**; there is no architectural state named RUN. The narrow waveform cells use documented abbreviations, while the numeric row shows the actual CSR code. Each operation provides the full names used in its figures.
+
+| CSR code | Waveform label | Arm state name |
+|---|---|---|
+| 0x0 | STOP | Stopped |
+| 0x1 | EXEC | Executing |
+| 0x2 | MISS | Cache miss |
+| 0x3 | UPC | Updating PC |
+| 0x4 | WFE | Waiting for event |
+| 0x5 | BAR | At barrier |
+| 0x7 | WFP | Waiting for peripheral |
+| 0x8 | KILL | Killing |
+| 0x9 | COMP | Completing |
+| 0xe | FC | Faulting completing |
+| 0xf | FLT | Faulting |
+
+Codes 0x6 and 0xa?0xd are reserved. The internal-state row has a different encoding: its EX label means C_EXEC and its END label means C_COMPLETING. On the architectural CSR row, EXEC and COMP name Executing and Completing respectively. The JSON metadata preserves the full Arm names alongside their displayed abbreviations.
+
 ## Color guide
 
 Colors use the standard WaveDrom default-skin bus symbols `2..9`, as demonstrated in the [official tutorial](https://wavedrom.com/tutorial.html). They are encoded in the saved JSON, so copying it into the online editor preserves the same pastel fills. Text stays dark on a light background. Clock, cycle ruler and handshake wires remain neutral so the functional highlights are easy to locate.
