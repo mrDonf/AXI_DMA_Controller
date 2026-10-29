@@ -24,7 +24,7 @@ module dma_thread_status_tb;
   logic [3:0] ar_cache;
   logic [DATA_W-1:0] r_data = 0;
   logic [1:0] r_resp = 0;
-  int updates = 0, refills = 0;
+  int updates = 0, refills = 0, cycles = 0, last_update_cycle = 0;
   bit check_commit = 0, seen_local_request = 0;
   logic [31:0] expected_commit;
 
@@ -114,15 +114,24 @@ module dma_thread_status_tb;
   endfunction
   always @(posedge clk) begin
     if (!rst_n) begin
-      updates = 0; refills = 0; check_commit = 0;
+      updates = 0; refills = 0; cycles = 0; last_update_cycle = 0; check_commit = 0;
     end else begin
+      cycles++;
       if (check_commit && thread_pc !== expected_commit)
         $fatal(1, "Updating PC committed %h, expected %h", thread_pc, expected_commit);
       check_commit = (status == ST_UPDATING_PC);
       if (status == ST_UPDATING_PC) begin
+        // MOV at PC 0 and LP at PC 6 both leave the next instruction in the
+        // channel's local line buffer. The next UPDATING_PC must follow after
+        // exactly one EXEC cycle, without a FETCH bubble.
+        if (!MANAGER && (updates == 1 || updates == 2) &&
+            cycles - last_update_cycle != 2)
+          $fatal(1, "buffer-hit instruction took %0d cycles, expected 2",
+                 cycles - last_update_cycle);
         if (update_from(updates) < 0 || thread_pc !== BASE + update_from(updates))
           $fatal(1, "Updating PC phase %0d at wrong PC %h", updates, thread_pc);
         expected_commit = BASE + update_to(updates);
+        last_update_cycle = cycles;
         updates++;
       end
       if (status == ST_CACHE_MISS && !(ar_valid || r_ready))

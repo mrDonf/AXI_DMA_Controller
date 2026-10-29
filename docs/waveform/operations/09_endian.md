@@ -39,16 +39,16 @@ Group brackets separate the thread, shared storage and active interfaces. Inacti
 
 [Open SVG at full size](../svg/09_endian_1.svg) | [WaveDrom JSON](../wavejson/09_endian_1.json)
 
-Source: `direct_swap32`. Core/unit cycle snapshots cover the selected **392.5..532.5 ns** interval. The first cell's right sampling edge is **392.5 ns**.
+Source: `direct_swap32`. Core/unit cycle snapshots cover the selected **377.5..517.5 ns** interval. The first cell's right sampling edge is **377.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
-| 412.5 | AR accepted | ID=0; address=0x10000000; 2 beats x 8 B; INCR |
-| 422.5 | RLAST accepted | RESP=0 |
-| 432.5 | AW accepted | ID=0; address=0x20000000; 2 beats x 8 B; INCR |
-| 442.5 | WLAST accepted | WSTRB=0xff |
-| 447.5 | B response accepted | RESP=0 |
-| 467.5 | IRQ bitmap | 0x1 |
+| 397.5 | AR accepted | ID=0; address=0x10000000; 2 beats x 8 B; INCR |
+| 412.5 | RLAST accepted | RESP=0 |
+| 422.5 | AW accepted | ID=0; address=0x20000000; 2 beats x 8 B; INCR |
+| 432.5 | WLAST accepted | WSTRB=0xff |
+| 437.5 | B response accepted | RESP=0 |
+| 452.5 | IRQ bitmap | 0x1 |
 
 Full values for the short labels in this picture (matching D labels mean matching data):
 
@@ -69,16 +69,16 @@ Useful constant context: `AR.ready=1 (no back-pressure)`; `AR.len=01`; `AW.ready
 
 [Open SVG at full size](../svg/09_endian_2.svg) | [WaveDrom JSON](../wavejson/09_endian_2.json)
 
-Source: `direct_swap64_narrow`. Core/unit cycle snapshots cover the selected **392.5..552.5 ns** interval. The first cell's right sampling edge is **392.5 ns**.
+Source: `direct_swap64_narrow`. Core/unit cycle snapshots cover the selected **377.5..537.5 ns** interval. The first cell's right sampling edge is **377.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
-| 412.5 | AR accepted | ID=0; address=0x10000000; 2 beats x 8 B; INCR |
-| 422.5 | RLAST accepted | RESP=0 |
-| 432.5 | AW accepted | ID=0; address=0x20000000; 8 beats x 2 B; INCR |
-| 472.5 | WLAST accepted | WSTRB=0xc0 |
-| 477.5 | B response accepted | RESP=0 |
-| 497.5 | IRQ bitmap | 0x1 |
+| 397.5 | AR accepted | ID=0; address=0x10000000; 2 beats x 8 B; INCR |
+| 412.5 | RLAST accepted | RESP=0 |
+| 422.5 | AW accepted | ID=0; address=0x20000000; 8 beats x 2 B; INCR |
+| 462.5 | WLAST accepted | WSTRB=0xc0 |
+| 467.5 | B response accepted | RESP=0 |
+| 482.5 | IRQ bitmap | 0x1 |
 
 Full values for the short labels in this picture (matching D labels mean matching data):
 

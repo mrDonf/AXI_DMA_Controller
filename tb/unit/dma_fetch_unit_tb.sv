@@ -4,7 +4,7 @@ module dma_fetch_unit_tb;
   parameter int LINE_BYTES = 8;
   logic clk = 0, rst_n = 0;
   always #5 clk = ~clk;
-  logic fetch_req = 0, inv = 0, insn_valid, fetch_err, miss, ic_req;
+  logic fetch_req = 0, inv = 0, insn_valid, fetch_err, miss, fast_hit, ic_req;
   logic [31:0] pc = 32'h1000, ic_addr;
   logic [INSN_W-1:0] insn;
   logic ic_resp_valid = 0, ic_resp_err = 0, ic_resp_retry = 0;

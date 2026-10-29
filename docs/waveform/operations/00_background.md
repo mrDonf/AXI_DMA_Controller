@@ -170,7 +170,7 @@ There are two different encodings. The current revision adds UPC and CFG phases 
 | `C_UPDATING_PC` | 10 | `UPC` | `0x3` | Calculate and commit sequential/loop PC; overlap fetch of the target. |
 | `C_RECONFIG` | 11 | `CFG` | `0x5` | Drain a discontinuity barrier before committing DMAMOV. |
 
-CSR `0x3` is now explicitly implemented. Ordinary accepted instructions and wait/barrier wakeups pass through UPC before returning to FETCH. Internal enum 10 is therefore architectural status 3; internal WFE remains enum 3 and architectural status 4. The figures show the internal phase and architectural CSR status as separate rows.
+CSR `0x3` is now explicitly implemented. Ordinary accepted instructions and wait/barrier wakeups pass through UPC before selecting direct EXEC or FETCH. Internal enum 10 is therefore architectural status 3; internal WFE remains enum 3 and architectural status 4. The figures show the internal phase and architectural CSR status as separate rows.
 
 In this CSR layout, `[8:4]` identifies the wakeup event/peripheral while waiting, `[15]` and `[14]` identify the P/B DMAWFP selection while in WFP, and `[21]` reports the channel's non-secure state. A retained wakeup number outside WFE/WFP does not mean the channel is still waiting. Decode the low status field first, then interpret the associated context bits.
 
@@ -183,7 +183,8 @@ flowchart TD
     S["STOPPED"] -->|"DMAGO accepted"| F["FETCH"]
     F -->|"insn_valid"| E["EXEC"]
     E -->|"instruction completes or request is accepted"| U["UPDATING_PC"]
-    U -->|"commit PC; overlapping target fetch"| F
+    U -->|"fast local hit: commit PC and instruction"| E
+    U -->|"no fast hit: wait for delivery"| F
     E -->|"discontinuous MOV"| R["RECONFIG"]
     R -->|"drain and commit MOV"| U
     E -->|"DMAWFE"| V["WFE"]
@@ -220,7 +221,7 @@ On `go_valid` while stopped, the channel loads `go_pc` into PC, captures `go_ns`
 
 Within FETCH, software sees Cache miss only when the shared cache reports `ic_refill=1` for this thread, from its refill AR phase through RLAST, including stalls. Arbitration wait, instruction assembly and a warm shared-cache hit report Executing. The front-end `fetch_miss` describes local-buffer work and no longer selects CSR status. An invalidated refill may drain without reporting an active miss. A `fetch_err` records an instruction-fetch fault and FAR=PC, then enters FAULT_COMPLETING rather than executing the returned bytes.
 
-**EXEC — act on the decoded instruction.** Simple operations such as DMAMOV, DMANOP, address arithmetic and DMASEV update their effects and proceed through UPC to FETCH. Loop instructions also proceed through UPC to FETCH, choosing either the sequential PC or a branch target. For loads and stores, leaving EXEC normally means the descriptor was accepted by the datapath, not that AXI data has finished moving.
+**EXEC — act on the decoded instruction.** Simple operations such as DMAMOV, DMANOP, address arithmetic and DMASEV update their effects and proceed through UPC to direct EXEC on a fast local hit, otherwise FETCH. Loop instructions also proceed through UPC to direct EXEC on a fast local hit, otherwise FETCH, choosing either the sequential PC or a branch target. For loads and stores, leaving EXEC normally means the descriptor was accepted by the datapath, not that AXI data has finished moving.
 
 | Instruction class in EXEC | Condition to leave EXEC | PC/address effect |
 |---|---|---|
@@ -235,11 +236,11 @@ If a required `ld_ready` or `st_ready` is low, the channel stays in EXEC with th
 
 ### 1.8.4 Waiting for an event, a peripheral or a barrier
 
-**WFE — wait for an event.** DMAWFE captures the event number in `wake_num` and enters WFE. The channel asserts `wfe_valid` for that event. On `wfe_hit`, it enters UPC, which commits PC past DMAWFE before FETCH. A sticky event set before the wait can satisfy it; the producer need not pulse DMASEV during the displayed WFE interval. An interrupt-routed event (`INTEN[e]=1`) does not satisfy WFE in this design.
+**WFE — wait for an event.** DMAWFE captures the event number in `wake_num` and enters WFE. The channel asserts `wfe_valid` for that event. On `wfe_hit`, it enters UPC, which commits PC past DMAWFE before direct EXEC or FETCH. A sticky event set before the wait can satisfy it; the producer need not pulse DMASEV during the displayed WFE interval. An interrupt-routed event (`INTEN[e]=1`) does not satisfy WFE in this design.
 
 WFE suspends instruction progress, not previously submitted bus work, and it releases the load-lock. If the DMAWFE invalidation option is set, the cache-maintenance request is made when that instruction executes, before waiting for the event. See [late and sticky events](13_events.md).
 
-**WFP — wait for peripheral permission.** DMAWFP records the peripheral number and S/B/P selection, then asserts `wfp_valid` while waiting. The release condition is the core-side `wfp_gnt` from peripheral control. On a grant, the channel records request-type/last context, selects UPC to advance PC before FETCH. S and B select single/burst request flags with `req_last=0`; P copies burst/last information from the granted peripheral context. The detailed qualification rules are illustrated in [request types](12_request_types.md).
+**WFP — wait for peripheral permission.** DMAWFP records the peripheral number and S/B/P selection, then asserts `wfp_valid` while waiting. The release condition is the core-side `wfp_gnt` from peripheral control. On a grant, the channel records request-type/last context, selects UPC to advance PC before direct EXEC or FETCH. S and B select single/burst request flags with `req_last=0`; P copies burst/last information from the granted peripheral context. The detailed qualification rules are illustrated in [request types](12_request_types.md).
 
 External DR acceptance and internal WFP grant are different events, especially across CDC. A request can already be pending before WFP begins. Leaving WFP permits subsequent instructions to transfer data; it does not establish that payload was read/written or that a DA acknowledgement has reached the peripheral. See [memory-to-peripheral](10_m2p.md), [peripheral-to-memory](11_p2m.md) and [CDC](19_cdc.md).
 
@@ -247,9 +248,9 @@ External DR acceptance and internal WFP grant are different events, especially a
 
 | Instruction | Condition used by this RTL | What happens on release |
 |---|---|---|
-| DMARMB | `rd_busy=0` | Select UPC to advance PC before FETCH; writes need not also be idle. |
-| DMAWMB | `wr_busy=0` | Select UPC to advance PC before FETCH; reads need not also be idle. |
-| DMAFLUSHP | First require `dp_idle`; then require `flush_valid && flush_ready` | Clear request-type/last flags, advance PC and proceed through UPC to FETCH. |
+| DMARMB | `rd_busy=0` | Select UPC to advance PC before direct EXEC or FETCH; writes need not also be idle. |
+| DMAWMB | `wr_busy=0` | Select UPC to advance PC before direct EXEC or FETCH; reads need not also be idle. |
+| DMAFLUSHP | First require `dp_idle`; then require `flush_valid && flush_ready` | Clear request-type/last flags, advance PC and proceed through UPC to direct EXEC on a fast local hit, otherwise FETCH. |
 
 For DMAFLUSHP, `flush_ready` means peripheral control has accepted the flush request into its acknowledgement queue. It does **not** mean that the external DA flush request and returning DR flush acknowledgement have already completed. Peripheral control manages that exchange separately. See [peripheral transfers](10_m2p.md).
 
@@ -336,7 +337,7 @@ Each visible cell is a pre-edge snapshot. A grant, final response or error sampl
 
 ### 1.8.9 Updating PC, real refills and implicit reconfiguration barriers
 
-**UPDATING_PC is an architectural phase with observable work.** Instruction effects occur in EXEC. Sequential and loop-branch arithmetic commit registered CPC at the end of UPC. The fetch unit is enabled during UPC using `fetch_pc`, the calculated target, so fetching overlaps calculation rather than adding a mandatory idle fetch bubble. There is no second issue of LD/ST in UPC. END and KILL retain the terminating PC. Event/peripheral/barrier releases select UPC instead of directly committing the next PC.
+**UPDATING_PC is an architectural phase with observable work.** The optimized channel enters EXEC directly at the end of UPC when `fetch_fast_hit=1`. This requires the front end to be idle, the complete target instruction to fit inside the valid local line buffer, and no pending result, error or invalidation. The same edge registers the instruction and commits PC. Otherwise UPC selects FETCH and waits for delivery. This bypass adds no architectural status: CSR is still 3 during UPC and 1 in EXEC; FETCH reports 1 or 2 according to actual refill state. Instruction effects occur in EXEC. Sequential and loop-branch arithmetic commit registered CPC at the end of UPC. The fetch unit is enabled during UPC using `fetch_pc`, the calculated target, so fetching overlaps calculation rather than adding a mandatory idle fetch bubble. There is no second issue of LD/ST in UPC. END and KILL retain the terminating PC. Event/peripheral/barrier releases select UPC instead of directly committing the next PC.
 
 In a snapshot, CPC can still show the old instruction during UPC while `fetch_pc` already presents the next target. A taken loop chooses the backward target; loop exit chooses the sequential target. Software polling can now observe CSR=3. This extra status must not be mistaken for a cache miss or a stalled bus descriptor.
 

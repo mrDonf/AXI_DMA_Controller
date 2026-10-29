@@ -45,15 +45,12 @@ Source: `direct_wait_event`. Core/unit cycle snapshots cover the selected **437.
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
 | 512.5 | WFE hit | 0x1 |
-| 592.5 | AR accepted | ID=0; address=0x10000000; 1 beats x 8 B; INCR |
+| 572.5 | AR accepted | ID=0; address=0x10000000; 1 beats x 8 B; INCR |
+| 577.5 | RLAST accepted | RESP=0 |
+| 587.5 | AW accepted | ID=0; address=0x20000000; 1 beats x 8 B; INCR |
+| 592.5 | WLAST accepted | WSTRB=0xff |
 
-Full values for the short labels in this picture (matching D labels mean matching data):
-
-| Label | Signal(s) | Full value |
-|---|---|---|
-| A1 | ch0.PC | `00010015` |
-
-Useful constant context: `arready=1 (no back-pressure)`.
+Useful constant context: `arready=1 (no back-pressure)`; `awready=1 (no back-pressure)`; `wready=1 (no back-pressure)`.
 
 ### Waveform 2
 

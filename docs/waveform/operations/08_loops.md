@@ -45,28 +45,28 @@ Group brackets separate the thread, shared storage and active interfaces. Inacti
 
 [Open SVG at full size](../svg/08_loops_1.svg) | [WaveDrom JSON](../wavejson/08_loops_1.json)
 
-Source: `direct_loop2d`. Core/unit cycle snapshots cover the selected **417.5..577.5 ns** interval. The first cell's right sampling edge is **417.5 ns**.
+Source: `direct_loop2d`. Core/unit cycle snapshots cover the selected **392.5..552.5 ns** interval. The first cell's right sampling edge is **392.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
-| 442.5 | AR accepted | ID=0; address=0x10000000; 2 beats x 8 B; INCR |
+| 417.5 | AR accepted | ID=0; address=0x10000000; 2 beats x 8 B; INCR |
+| 432.5 | RLAST accepted | RESP=0 |
+| 442.5 | AW accepted | ID=0; address=0x20000000; 2 beats x 8 B; INCR |
+| 447.5 | AR accepted | ID=0; address=0x10000010; 2 beats x 8 B; INCR |
+| 452.5 | WLAST accepted | WSTRB=0xff |
+| 457.5 | B response accepted | RESP=0 |
 | 462.5 | RLAST accepted | RESP=0 |
-| 472.5 | AW accepted | ID=0; address=0x20000000; 2 beats x 8 B; INCR |
+| 472.5 | AW accepted | ID=0; address=0x20000010; 2 beats x 8 B; INCR |
 | 482.5 | WLAST accepted | WSTRB=0xff |
-| 487.5 | AR accepted | ID=0; address=0x10000010; 2 beats x 8 B; INCR |
 | 487.5 | B response accepted | RESP=0 |
-| 502.5 | RLAST accepted | RESP=0 |
-| 512.5 | AW accepted | ID=0; address=0x20000010; 2 beats x 8 B; INCR |
-| 522.5 | WLAST accepted | WSTRB=0xff |
-| 527.5 | B response accepted | RESP=0 |
 
 Full values for the short labels in this picture (matching D labels mean matching data):
 
 | Label | Signal(s) | Full value |
 |---|---|---|
+| A1 | ch0.PC | `00010012` |
 | v1 | opcode (when EXEC) | `ADDH-S` |
 | v2 | opcode (when EXEC) | `ADDH-D` |
-| v3 | lc0_o | `00000000` |
 
 Useful constant context: `ccr_o=0005c017`; `arready=1 (no back-pressure)`; `awready=1 (no back-pressure)`; `wready=1 (no back-pressure)`.
 
@@ -76,27 +76,27 @@ Useful constant context: `ccr_o=0005c017`; `arready=1 (no back-pressure)`; `awre
 
 [Open SVG at full size](../svg/08_loops_2.svg) | [WaveDrom JSON](../wavejson/08_loops_2.json)
 
-Source: `direct_loop2d`. Core/unit cycle snapshots cover the selected **602.5..762.5 ns** interval. The first cell's right sampling edge is **602.5 ns**.
+Source: `direct_loop2d`. Core/unit cycle snapshots cover the selected **537.5..697.5 ns** interval. The first cell's right sampling edge is **537.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
-| 672.5 | AR accepted | ID=0; address=0x10000030; 2 beats x 8 B; INCR |
-| 692.5 | RLAST accepted | RESP=0 |
-| 702.5 | AW accepted | ID=0; address=0x20000038; 2 beats x 8 B; INCR |
-| 712.5 | WLAST accepted | WSTRB=0xff |
-| 717.5 | AR accepted | ID=0; address=0x10000040; 2 beats x 8 B; INCR |
-| 727.5 | B response accepted | RESP=0 |
-| 732.5 | RLAST accepted | RESP=0 |
-| 742.5 | AW accepted | ID=0; address=0x20000048; 2 beats x 8 B; INCR |
-| 752.5 | WLAST accepted | WSTRB=0xff |
-| 757.5 | B response accepted | RESP=0 |
+| 607.5 | AR accepted | ID=0; address=0x10000030; 2 beats x 8 B; INCR |
+| 622.5 | RLAST accepted | RESP=0 |
+| 632.5 | AW accepted | ID=0; address=0x20000038; 2 beats x 8 B; INCR |
+| 637.5 | AR accepted | ID=0; address=0x10000040; 2 beats x 8 B; INCR |
+| 642.5 | WLAST accepted | WSTRB=0xff |
+| 652.5 | RLAST accepted | RESP=0 |
+| 657.5 | B response accepted | RESP=0 |
+| 662.5 | AW accepted | ID=0; address=0x20000048; 2 beats x 8 B; INCR |
+| 672.5 | WLAST accepted | WSTRB=0xff |
+| 677.5 | B response accepted | RESP=0 |
 
 Full values for the short labels in this picture (matching D labels mean matching data):
 
 | Label | Signal(s) | Full value |
 |---|---|---|
 | v1 | opcode (when EXEC) | `ADDH-S` |
-| A1 | sar_o | `10000060` |
+| v2 | opcode (when EXEC) | `ADDH-D` |
 
 Useful constant context: `ccr_o=0005c017`; `arready=1 (no back-pressure)`; `awready=1 (no back-pressure)`; `wready=1 (no back-pressure)`.
 

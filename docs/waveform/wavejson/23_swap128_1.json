@@ -2,20 +2,31 @@
   "signal": [
     {
       "name": "sample clock",
-      "wave": "p.......|p......."
+      "wave": "p....|p....................."
     },
     {
       "name": "source cycle",
-      "wave": "========|========",
+      "wave": "=====|======================",
       "data": [
         "0",
         "1",
         "2",
         "3",
         "4",
-        "5",
-        "6",
-        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
         "22",
         "23",
         "24",
@@ -30,33 +41,40 @@
       "Thread",
       {
         "name": "ch0.state (internal)",
-        "wave": "8578576.|6.......",
+        "wave": "7876.|6.....................",
         "data": [
-          "UPC",
-          "FET",
           "EX",
           "UPC",
-          "FET",
           "EX",
           "END",
           "END"
         ]
       },
       {
-        "name": "ch0.CSR status",
-        "wave": "87.87.6.|6.......",
+        "name": "ch0.CSR state (Arm)",
+        "wave": "7876.|6.....................",
         "data": [
-          "UPC",
           "RUN",
           "UPC",
           "RUN",
           "END",
           "END"
+        ]
+      },
+      {
+        "name": "ch0.CSR code (Arm)",
+        "wave": "7876.|6.....................",
+        "data": [
+          "1",
+          "3",
+          "1",
+          "9",
+          "9"
         ]
       },
       {
         "name": "opcode (when EXEC)",
-        "wave": "x.7x.6x.|x.......",
+        "wave": "7x6x.|x.....................",
         "data": [
           "ST",
           "END"
@@ -67,9 +85,11 @@
       "MFIFO",
       {
         "name": "mf_push",
-        "wave": "2.......|2.727..2",
+        "wave": "2....|2.7.2..72.72..........",
         "data": [
           "0",
+          "0",
+          "1",
           "0",
           "1",
           "0",
@@ -79,11 +99,14 @@
       },
       {
         "name": "mf_pop",
-        "wave": "2.......|2......6",
+        "wave": "2....|2.....6.2.........6.2.",
         "data": [
           "0",
           "0",
-          "1"
+          "1",
+          "0",
+          "1",
+          "0"
         ]
       }
     ],
@@ -91,30 +114,30 @@
       "AXI read",
       {
         "name": "AR.valid",
-        "wave": "01.0....|0......."
+        "wave": "1..0.|0....................."
       },
       {
         "name": "AR.ready",
-        "wave": "101.0101|0..10101"
+        "wave": "0.10.|0101..0..1.0..10...101"
       },
       {
         "name": "AR.addr",
-        "wave": "x5.x....|x.......",
+        "wave": "5..x.|x.....................",
         "data": [
           "20000000"
         ]
       },
       {
         "name": "rvalid",
-        "wave": "0.......|0.101..0"
+        "wave": "0....|0.1.0..10.10.........."
       },
       {
         "name": "rready",
-        "wave": "0.......|0.1....."
+        "wave": "0....|0.1..................."
       },
       {
         "name": "rdata",
-        "wave": "x.......|x.5x678x",
+        "wave": "x....|x.56x..7x.8x..........",
         "data": [
           "D1",
           "D2",
@@ -124,25 +147,60 @@
       },
       {
         "name": "rlast",
-        "wave": "x.......|x.0x0.1x"
+        "wave": "x....|x.0.x..0x.1x.........."
       }
     ],
     [
       "AXI write",
       {
         "name": "AW.valid",
-        "wave": "0.......|0.....1."
+        "wave": "0....|0....1..0...1.......0."
       },
       {
         "name": "AW.ready",
-        "wave": "0.10.10.|0......1"
+        "wave": "0...1|0......1.01.0......1.0"
       },
       {
         "name": "AW.addr",
-        "wave": "x.......|x.....5.",
+        "wave": "x....|x....5..x...5.......x.",
         "data": [
-          "30000ff0"
+          "30000ff0",
+          "30001000"
         ]
+      },
+      {
+        "name": "wvalid",
+        "wave": "0....|0.......1.........0.1."
+      },
+      {
+        "name": "wready",
+        "wave": "010..|0....1.0......1...0101"
+      },
+      {
+        "name": "wdata",
+        "wave": "x....|x.......4......356x.7.",
+        "data": [
+          "000000002c2d2e2f",
+          "D5",
+          "D6",
+          "D7",
+          "D8"
+        ]
+      },
+      {
+        "name": "wstrb",
+        "wave": "x....|x.......2......222x.2.",
+        "data": [
+          "0f",
+          "f0",
+          "0f",
+          "f0",
+          "0f"
+        ]
+      },
+      {
+        "name": "wlast",
+        "wave": "x....|x.......0........1x.0."
       }
     ]
   ],
@@ -150,7 +208,7 @@
     "text": "Swap 128-bit groups across narrower AXI beats - 1"
   },
   "foot": {
-    "text": "1 cell = 5 ns; first RIGHT edge = 572.5 ns; | = omitted idle cycles"
+    "text": "1 cell = 5 ns; first RIGHT edge = 562.5 ns; | = omitted idle cycles"
   },
   "config": {
     "hscale": 1,
@@ -163,32 +221,43 @@
     "exclude_instruction_fetch": true,
     "clock_source": "dma_wave_top.tb.aclk",
     "cycle_ns": 5.0,
-    "first_right_edge_ns": 572.5,
-    "last_right_edge_ns": 717.5,
+    "first_right_edge_ns": 562.5,
+    "last_right_edge_ns": 707.5,
     "right_edge_ns": [
+      562.5,
+      567.5,
       572.5,
       577.5,
       582.5,
-      587.5,
-      592.5,
-      597.5,
+      null,
       602.5,
       607.5,
-      null,
+      612.5,
+      617.5,
+      622.5,
+      627.5,
+      632.5,
+      637.5,
+      642.5,
+      647.5,
+      652.5,
+      657.5,
+      662.5,
+      667.5,
+      672.5,
+      677.5,
       682.5,
       687.5,
       692.5,
       697.5,
       702.5,
-      707.5,
-      712.5,
-      717.5
+      707.5
     ],
     "idle_gaps": [
       {
-        "after_ns": 607.5,
-        "before_ns": 682.5,
-        "omitted_samples": 14
+        "after_ns": 582.5,
+        "before_ns": 602.5,
+        "omitted_samples": 3
       }
     ],
     "omitted_signals": [
@@ -226,31 +295,6 @@
         "name": "rresp",
         "path": "dma_wave_top.tb.axi.rresp",
         "reason": "constant; moved to context table"
-      },
-      {
-        "name": "wvalid",
-        "path": "dma_wave_top.tb.axi.wvalid",
-        "reason": "interface inactive in this excerpt"
-      },
-      {
-        "name": "wready",
-        "path": "dma_wave_top.tb.axi.wready",
-        "reason": "interface inactive in this excerpt"
-      },
-      {
-        "name": "wdata",
-        "path": "dma_wave_top.tb.axi.wdata",
-        "reason": "interface inactive in this excerpt"
-      },
-      {
-        "name": "wstrb",
-        "path": "dma_wave_top.tb.axi.wstrb",
-        "reason": "interface inactive in this excerpt"
-      },
-      {
-        "name": "wlast",
-        "path": "dma_wave_top.tb.axi.wlast",
-        "reason": "interface inactive in this excerpt"
       },
       {
         "name": "bvalid",
@@ -351,6 +395,42 @@
         "sources": [
           "dma_wave_top.tb.axi.rdata"
         ]
+      },
+      "D5": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "28292a2b00000000",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D6": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "0000000024252627",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D7": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "2021222300000000",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
+      },
+      "D8": {
+        "signals": [
+          "wdata"
+        ],
+        "value": "000000003c3d3e3f",
+        "sources": [
+          "dma_wave_top.tb.axi.wdata"
+        ]
       }
     },
     "lanes": [
@@ -359,15 +439,26 @@
         "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.state",
         "width": 4,
         "samples": [
-          "1010",
-          "1",
           "10",
           "1010",
-          "1",
           "10",
           "110",
           "110",
           null,
+          "110",
+          "110",
+          "110",
+          "110",
+          "110",
+          "110",
+          "110",
+          "110",
+          "110",
+          "110",
+          "110",
+          "110",
+          "110",
+          "110",
           "110",
           "110",
           "110",
@@ -380,19 +471,66 @@
         "gate": null
       },
       {
-        "name": "ch0.CSR status",
+        "name": "ch0.CSR state (Arm)",
         "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.csr[3:0]",
         "width": 4,
         "samples": [
-          "0011",
-          "0001",
           "0001",
           "0011",
-          "0001",
           "0001",
           "1001",
           "1001",
           null,
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001"
+        ],
+        "gate": null
+      },
+      {
+        "name": "ch0.CSR code (Arm)",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.csr[3:0]",
+        "width": 4,
+        "samples": [
+          "0001",
+          "0011",
+          "0001",
+          "1001",
+          "1001",
+          null,
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
+          "1001",
           "1001",
           "1001",
           "1001",
@@ -409,12 +547,23 @@
         "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.op",
         "width": 8,
         "samples": [
-          null,
-          null,
           "1000",
           null,
-          null,
           "0",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
           null,
           null,
           null,
@@ -439,17 +588,28 @@
           "0",
           "0",
           "0",
-          "0",
-          "0",
-          "0",
           null,
           "0",
           "0",
           "1",
+          "1",
+          "0",
+          "0",
           "0",
           "1",
+          "0",
+          "0",
           "1",
-          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
           "0"
         ],
         "gate": null
@@ -464,9 +624,6 @@
           "0",
           "0",
           "0",
-          "0",
-          "0",
-          "0",
           null,
           "0",
           "0",
@@ -474,8 +631,22 @@
           "0",
           "0",
           "0",
+          "1",
+          "1",
           "0",
-          "1"
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
+          "0",
+          "0"
         ],
         "gate": null
       },
@@ -484,15 +655,26 @@
         "path": "dma_wave_top.tb.axi.arvalid",
         "width": 1,
         "samples": [
-          "0",
           "1",
           "1",
-          "0",
-          "0",
-          "0",
+          "1",
           "0",
           "0",
           null,
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
           "0",
           "0",
           "0",
@@ -509,19 +691,30 @@
         "path": "dma_wave_top.tb.axi.arready",
         "width": 1,
         "samples": [
-          "1",
           "0",
-          "1",
-          "1",
           "0",
           "1",
           "0",
-          "1",
+          "0",
           null,
           "0",
+          "1",
+          "0",
+          "1",
+          "1",
+          "1",
+          "0",
           "0",
           "0",
           "1",
+          "1",
+          "0",
+          "0",
+          "0",
+          "1",
+          "0",
+          "0",
+          "0",
           "0",
           "1",
           "0",
@@ -534,9 +727,20 @@
         "path": "dma_wave_top.tb.axi.araddr",
         "width": 32,
         "samples": [
+          "100000000000000000000000000000",
+          "100000000000000000000000000000",
+          "100000000000000000000000000000",
           null,
-          "100000000000000000000000000000",
-          "100000000000000000000000000000",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
           null,
           null,
           null,
@@ -564,18 +768,29 @@
           "0",
           "0",
           "0",
-          "0",
-          "0",
-          "0",
           null,
           "0",
           "0",
           "0",
           "0",
           "0",
+          "1",
+          "1",
+          "1",
+          "0",
+          "0",
+          "0",
           "0",
           "1",
-          "1"
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "0",
+          "0"
         ],
         "gate": null
       },
@@ -586,12 +801,9 @@
         "samples": [
           "0",
           "0",
-          "1",
           "0",
           "0",
           "1",
-          "0",
-          "0",
           null,
           "0",
           "0",
@@ -600,7 +812,21 @@
           "0",
           "0",
           "0",
-          "1"
+          "1",
+          "1",
+          "0",
+          "1",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
+          "0"
         ],
         "gate": null
       },
@@ -620,12 +846,23 @@
           null,
           null,
           null,
-          null,
-          null,
-          null,
-          null,
           "110000000000000000111111110000",
-          "110000000000000000111111110000"
+          "110000000000000000111111110000",
+          "110000000000000000111111110000",
+          null,
+          null,
+          null,
+          null,
+          "110000000000000001000000000000",
+          "110000000000000001000000000000",
+          "110000000000000001000000000000",
+          "110000000000000001000000000000",
+          "110000000000000001000000000000",
+          "110000000000000001000000000000",
+          "110000000000000001000000000000",
+          "110000000000000001000000000000",
+          null,
+          null
         ],
         "gate": "dma_wave_top.tb.axi.awvalid"
       },
@@ -639,17 +876,28 @@
           "0",
           "0",
           "0",
-          "0",
-          "0",
-          "0",
           null,
           "0",
           "0",
           "1",
+          "1",
+          "0",
+          "0",
           "0",
           "1",
+          "0",
+          "0",
           "1",
-          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
           "0"
         ],
         "gate": null
@@ -664,12 +912,23 @@
           "0",
           "0",
           "0",
-          "0",
-          "0",
-          "0",
           null,
           "0",
           "0",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
           "1",
           "1",
           "1",
@@ -692,14 +951,25 @@
           null,
           null,
           null,
-          null,
-          null,
-          null,
           "10011100100110001001010010010000100011001000100010000100100000",
-          null,
           "10111100101110001011010010110000101011001010100010100100101000",
+          null,
+          null,
+          null,
           "11011100110110001101010011010000110011001100100011000100110000",
+          null,
+          null,
           "11111100111110001111010011110000111011001110100011100100111000",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
           null
         ],
         "gate": "dma_wave_top.tb.axi.rvalid"
@@ -717,17 +987,208 @@
           null,
           null,
           null,
+          "0",
+          "0",
           null,
           null,
           null,
           "0",
           null,
-          "0",
-          "0",
+          null,
           "1",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
           null
         ],
         "gate": "dma_wave_top.tb.axi.rvalid"
+      },
+      {
+        "name": "wvalid",
+        "path": "dma_wave_top.tb.axi.wvalid",
+        "width": 1,
+        "samples": [
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          null,
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "1",
+          "0",
+          "0",
+          "1",
+          "1"
+        ],
+        "gate": null
+      },
+      {
+        "name": "wready",
+        "path": "dma_wave_top.tb.axi.wready",
+        "width": 1,
+        "samples": [
+          "0",
+          "1",
+          "0",
+          "0",
+          "0",
+          null,
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          "1",
+          "1",
+          "1",
+          "0",
+          "1",
+          "0",
+          "1"
+        ],
+        "gate": null
+      },
+      {
+        "name": "wdata",
+        "path": "dma_wave_top.tb.axi.wdata",
+        "width": 64,
+        "samples": [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          "101100001011010010111000101111",
+          "101100001011010010111000101111",
+          "101100001011010010111000101111",
+          "101100001011010010111000101111",
+          "101100001011010010111000101111",
+          "101100001011010010111000101111",
+          "101100001011010010111000101111",
+          "10100000101001001010100010101100000000000000000000000000000000",
+          "100100001001010010011000100111",
+          "10000000100001001000100010001100000000000000000000000000000000",
+          null,
+          null,
+          "111100001111010011111000111111",
+          "111100001111010011111000111111"
+        ],
+        "gate": "dma_wave_top.tb.axi.wvalid"
+      },
+      {
+        "name": "wstrb",
+        "path": "dma_wave_top.tb.axi.wstrb",
+        "width": 8,
+        "samples": [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          "1111",
+          "1111",
+          "1111",
+          "1111",
+          "1111",
+          "1111",
+          "1111",
+          "11110000",
+          "1111",
+          "11110000",
+          null,
+          null,
+          "1111",
+          "1111"
+        ],
+        "gate": "dma_wave_top.tb.axi.wvalid"
+      },
+      {
+        "name": "wlast",
+        "path": "dma_wave_top.tb.axi.wlast",
+        "width": 1,
+        "samples": [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "1",
+          null,
+          null,
+          "0",
+          "0"
+        ],
+        "gate": "dma_wave_top.tb.axi.wvalid"
       }
     ],
     "note": "Asynchronous pins are cycle snapshots; exact acceptance times are in the operation table and original VCD.",
@@ -801,6 +1262,31 @@
           "width": 64,
           "value": "3f3e3d3c3b3a3938",
           "symbol": "8"
+        },
+        {
+          "width": 64,
+          "value": "000000002c2d2e2f",
+          "symbol": "4"
+        },
+        {
+          "width": 64,
+          "value": "28292a2b00000000",
+          "symbol": "3"
+        },
+        {
+          "width": 64,
+          "value": "0000000024252627",
+          "symbol": "5"
+        },
+        {
+          "width": 64,
+          "value": "2021222300000000",
+          "symbol": "6"
+        },
+        {
+          "width": 64,
+          "value": "000000003c3d3e3f",
+          "symbol": "7"
         }
       ],
       "meaning": "State colors indicate state categories; data colors identify values within one figure. Labels remain authoritative; colors repeat after six distinct data values.",
@@ -813,9 +1299,9 @@
     "operation": "23_swap128",
     "number": 1,
     "source_window_ns": [
-      572.5,
-      722.5
+      562.5,
+      712.5
     ],
-    "source_vcd_sha256": "7b861752c46374b3d52eaf5c62eeb3afc468da1633a57b55f31146dc6846154e"
+    "source_vcd_sha256": "7243ca42a25c98144edee42cc389cd2fcf93bffc1c1b120038b58eaf39c362c1"
   }
 }

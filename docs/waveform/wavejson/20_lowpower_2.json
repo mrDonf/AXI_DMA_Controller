@@ -113,12 +113,21 @@
         ]
       },
       {
-        "name": "ch0.CSR status",
+        "name": "ch0.CSR state (Arm)",
         "wave": "2...........................7..5",
         "data": [
           "STOP",
           "RUN",
           "MISS"
+        ]
+      },
+      {
+        "name": "ch0.CSR code (Arm)",
+        "wave": "2...........................7..5",
+        "data": [
+          "0",
+          "1",
+          "2"
         ]
       },
       {
@@ -737,7 +746,47 @@
         "gate": null
       },
       {
-        "name": "ch0.CSR status",
+        "name": "ch0.CSR state (Arm)",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.csr[3:0]",
+        "width": 4,
+        "samples": [
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0000",
+          "0001",
+          "0001",
+          "0001",
+          "0010"
+        ],
+        "gate": null
+      },
+      {
+        "name": "ch0.CSR code (Arm)",
         "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.csr[3:0]",
         "width": 4,
         "samples": [
@@ -882,6 +931,6 @@
       1712.5,
       1872.5
     ],
-    "source_vcd_sha256": "14b0504f4d5899472a7ad306af5ba3f3a03544820bb03becbfe3b2f3c9137981"
+    "source_vcd_sha256": "da2c8f7d158e2f5a9e1ca20a8dd0d5ece8ca69ce0c012b929db756710cf97a58"
   }
 }

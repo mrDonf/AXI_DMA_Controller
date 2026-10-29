@@ -39,11 +39,11 @@ Group brackets separate the thread, shared storage and active interfaces. Inacti
 
 [Open SVG at full size](../svg/16_faults_1.svg) | [WaveDrom JSON](../wavejson/16_faults_1.json)
 
-Source: `direct_underflow`. Core/unit cycle snapshots cover the selected **307.5..467.5 ns** interval. The first cell's right sampling edge is **307.5 ns**.
+Source: `direct_underflow`. Core/unit cycle snapshots cover the selected **297.5..457.5 ns** interval. The first cell's right sampling edge is **297.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
-| 387.5 | FTR | 0x2000 |
+| 377.5 | FTR | 0x2000 |
 
 ### Waveform 2
 
@@ -51,56 +51,69 @@ Source: `direct_underflow`. Core/unit cycle snapshots cover the selected **307.5
 
 [Open SVG at full size](../svg/16_faults_2.svg) | [WaveDrom JSON](../wavejson/16_faults_2.json)
 
-Source: `dma_fault_test_sync`. Core/unit cycle snapshots cover the selected **3597.5..3757.5 ns** interval. The first cell's right sampling edge is **3597.5 ns**.
+Source: `dma_fault_test_sync`. Core/unit cycle snapshots cover the selected **3507.5..3667.5 ns** interval. The first cell's right sampling edge is **3507.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
-| 3607.5 | B response accepted | RESP=0 |
-| 3607.5 | WLAST accepted | WSTRB=0x01 |
-| 3617.5 | AW accepted | ID=0; address=0x200cbb6b; 5 beats x 1 B; INCR |
-| 3637.5 | B response accepted | RESP=0 |
-| 3642.5 | AR accepted | ID=0; address=0x100f363a; 15 beats x 2 B; INCR |
-| 3647.5 | AW accepted | ID=0; address=0x200cbb70; 5 beats x 1 B; INCR |
-| 3672.5 | WLAST accepted | WSTRB=0x20 |
-| 3677.5 | AR accepted | ID=3; address=0xe0000000; 16 beats x 8 B; INCR |
-| 3687.5 | B response accepted | RESP=0 |
-| 3687.5 | FTR | 0x40000 |
-| 3697.5 | AW accepted | ID=0; address=0x200cbb75; 5 beats x 1 B; INCR |
-| 3712.5 | WLAST accepted | WSTRB=0x04 |
+| 3517.5 | B response accepted | RESP=0 |
+| 3532.5 | WLAST accepted | WSTRB=0x40 |
+| 3537.5 | AW accepted | ID=0; address=0x200cbb61; 5 beats x 1 B; INCR |
+| 3552.5 | RLAST accepted | RESP=0 |
+| 3557.5 | AR accepted | ID=3; address=0xe0000000; 16 beats x 8 B; INCR |
+| 3557.5 | B response accepted | RESP=0 |
+| 3557.5 | WLAST accepted | WSTRB=0x08 |
+| 3567.5 | AW accepted | ID=0; address=0x200cbb66; 5 beats x 1 B; INCR |
+| 3582.5 | WLAST accepted | WSTRB=0x01 |
+| 3587.5 | B response accepted | RESP=0 |
+| 3597.5 | AW accepted | ID=0; address=0x200cbb6b; 5 beats x 1 B; INCR |
+| 3597.5 | FTR | 0x40000 |
+| 3617.5 | AR accepted | ID=0; address=0x100f363a; 15 beats x 2 B; INCR |
+| 3617.5 | AW accepted | ID=0; address=0x200cbb70; 5 beats x 1 B; INCR |
 
 Full values for the short labels in this picture (matching D labels mean matching data):
 
 | Label | Signal(s) | Full value |
 |---|---|---|
 | A1 | AR.addr | `100f363a` |
-| A2 | AW.addr | `200cbb6b` |
-| A3 | AW.addr | `200cbb70` |
-| A4 | AW.addr | `200cbb75` |
-| D1 | rdata | `bdbcbfbeb9b8bbba` |
-| D2 | rdata | `b5b4b7b6b1b0b3b2` |
-| D3 | rdata | `4c4d4e4f48494a4b` |
+| A2 | AW.addr | `200cbb66` |
+| A3 | AW.addr | `200cbb6b` |
+| A4 | AW.addr | `200cbb70` |
+| D1 | rdata | `4c4d4e4f48494a4b` |
+| D2 | rdata | `bdbcbfbeb9b8bbba` |
+| D3 | rdata | `b5b4b7b6b1b0b3b2` |
 | D4 | rdata | `adacafaea9a8abaa` |
 | D5 | rdata | `a5a4a7a6a1a0a3a2` |
-| D6 | rdata | `3435363730313233` |
-| D7 | rdata | `9d9c9f9e99989b9a` |
-| D8 | rdata | `9594979691909392` |
-| D9 | rdata | `8d8c8f8e89888b8a` |
-| D10 | wdata | `6200000000000000` |
-| D11 | wdata | `0000000000000061` |
-| D12 | wdata | `0000000000006000` |
-| D13 | wdata | `0000640000000000` |
-| D14 | wdata | `006b000000000000` |
-| D15 | wdata | `6a00000000000000` |
-| D16 | wdata | `0000000000000069` |
-| D17 | wdata | `0000000000006800` |
-| D18 | wdata | `00000000006f0000` |
-| D19 | wdata | `000000006e000000` |
-| D20 | wdata | `0000006d00000000` |
-| D21 | wdata | `0053000000000000` |
-| D22 | wdata | `5200000000000000` |
-| D23 | wdata | `0000000000000051` |
+| D6 | rdata | `9d9c9f9e99989b9a` |
+| D7 | rdata | `9594979691909392` |
+| D8 | rdata | `8d8c8f8e89888b8a` |
+| D9 | rdata | `8584878681808382` |
+| D10 | rdata | `fdfcfffef9f8fbfa` |
+| D11 | rdata | `f5f4f7f6f1f0f3f2` |
+| D12 | rdata | `edecefeee9e8ebea` |
+| D13 | rdata | `e5e4e7e6e1e0e3e2` |
+| D14 | rdata | `dddcdfded9d8dbda` |
+| D15 | wdata | `0000000000770000` |
+| D16 | wdata | `0000000076000000` |
+| D17 | wdata | `0000007500000000` |
+| D18 | wdata | `0000740000000000` |
+| D19 | wdata | `007b000000000000` |
+| D20 | wdata | `7a00000000000000` |
+| D21 | wdata | `0000000000000079` |
+| D22 | wdata | `0000000000007800` |
+| D23 | wdata | `00000000007f0000` |
+| D24 | wdata | `000000007e000000` |
+| D25 | wdata | `0000007d00000000` |
+| D26 | wdata | `00007c0000000000` |
+| D27 | wdata | `0063000000000000` |
+| D28 | wdata | `6200000000000000` |
+| D29 | wdata | `0000000000000061` |
+| D30 | wdata | `0000000000006000` |
+| D31 | wdata | `0000000000670000` |
+| D32 | wdata | `0000000066000000` |
+| D33 | wdata | `0000006500000000` |
+| D34 | wdata | `0000640000000000` |
 
-Useful constant context: `AW.len=04`; `bready=1 (no back-pressure)`.
+Useful constant context: `AW.len=04`; `rready=1 (no back-pressure)`; `bready=1 (no back-pressure)`.
 
 ## Result and rule to remember
 

@@ -117,6 +117,7 @@ module dma_manager
     .insn          (fetch_insn),
     .fetch_err     (fetch_err),
     .miss          (), // front-end pending is not architectural Cache miss
+    .fast_hit      (), // manager timing is unchanged
     .ic_req        (ic_req),
     .ic_addr       (ic_addr),
     .ic_resp_valid (ic_resp_valid),

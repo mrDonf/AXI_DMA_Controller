@@ -8,7 +8,8 @@
 // asynchronously; the thread only waits where the ISA requires it
 // (barriers, DMAEND, events, peripherals) or when a queue is full.
 //
-//   STOPPED --DMAGO--> FETCH --> EXEC --> UPDATING_PC --> FETCH
+//   STOPPED --DMAGO--> FETCH --> EXEC --> UPDATING_PC --> EXEC (line hit)
+//                                                  \---------> FETCH (wait)
 //   EXEC --> WFE / WFP / BARRIER --wake/complete--> UPDATING_PC
 //   EXEC --> COMPLETING (DMAEND) --> STOPPED
 //   EXEC --> KILLING (DMAKILL) --> STOPPED
@@ -162,7 +163,7 @@ module dma_channel
   //============================================================================
   // Instruction fetch
   //============================================================================
-  logic              fetch_req, insn_valid, fetch_err;
+  logic              fetch_req, insn_valid, fetch_err, fetch_fast_hit;
   logic [INSN_W-1:0] insn;
   logic [ADDR_W-1:0] fetch_pc;
 
@@ -181,6 +182,7 @@ module dma_channel
     .insn          (insn),
     .fetch_err     (fetch_err),
     .miss          (), // front-end pending is not architectural Cache miss
+    .fast_hit      (fetch_fast_hit),
     .ic_req        (ic_req),
     .ic_addr       (ic_addr),
     .ic_resp_valid (ic_resp_valid),
@@ -564,7 +566,9 @@ module dma_channel
         C_UPDATING_PC: begin
           pc        <= pc_branch ? pc - ADDR_W'(b1) : pc_next;
           pc_branch <= 1'b0;
-          state     <= C_FETCH;
+          // The fetch unit registers a buffered instruction on this edge.
+          // Execute it next cycle without an extra internal FETCH cycle.
+          state     <= fetch_fast_hit ? C_EXEC : C_FETCH;
         end
 
         C_WFE: begin

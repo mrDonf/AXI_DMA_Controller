@@ -47,10 +47,16 @@ Source: `direct_m2p_async`. Core/unit cycle snapshots cover the selected **687.5
 | 733.9 | P0 DR accepted | type=2 (flush); measured on peripheral clock |
 | 766.7 | P0 DR accepted | type=1 (burst); measured on peripheral clock |
 | 777.5 | WFP grant | 0x1 |
-| 807.5 | AR accepted | ID=0; address=0x10000000; 2 beats x 8 B; INCR |
+| 802.5 | AR accepted | ID=0; address=0x10000000; 2 beats x 8 B; INCR |
 | 822.5 | RLAST accepted | RESP=0 |
 | 832.5 | AW accepted | ID=0; address=0x40000000; 2 beats x 8 B; FIXED |
 | 842.5 | WLAST accepted | WSTRB=0xff |
+
+Full values for the short labels in this picture (matching D labels mean matching data):
+
+| Label | Signal(s) | Full value |
+|---|---|---|
+| A1 | ch0.PC | `00010014` |
 
 Useful constant context: `arready=1 (no back-pressure)`; `awready=1 (no back-pressure)`; `wready=1 (no back-pressure)`.
 

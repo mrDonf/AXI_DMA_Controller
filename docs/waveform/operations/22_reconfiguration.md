@@ -41,9 +41,9 @@ Source: `spec_source_barrier`. Core/unit cycle snapshots cover the selected **46
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
 | 497.5 | RLAST accepted | RESP=0 |
-| 542.5 | AW accepted | ID=0; address=0x30000000; 2 beats x 4 B; INCR |
-| 552.5 | WLAST accepted | WSTRB=0xf0 |
-| 557.5 | B response accepted | RESP=0 |
+| 532.5 | AW accepted | ID=0; address=0x30000000; 2 beats x 4 B; INCR |
+| 542.5 | WLAST accepted | WSTRB=0xf0 |
+| 547.5 | B response accepted | RESP=0 |
 
 Useful constant context: `ccr_o=00054015`; `awready=1 (no back-pressure)`; `wready=1 (no back-pressure)`.
 
@@ -53,17 +53,17 @@ Useful constant context: `ccr_o=00054015`; `awready=1 (no back-pressure)`; `wrea
 
 [Open SVG at full size](../svg/22_reconfiguration_2.svg) | [WaveDrom JSON](../wavejson/22_reconfiguration_2.json)
 
-Source: `spec_destination_barrier`. Core/unit cycle snapshots cover the selected **542.5..692.5 ns** interval. The first cell's right sampling edge is **542.5 ns**.
+Source: `spec_destination_barrier`. Core/unit cycle snapshots cover the selected **472.5..622.5 ns** interval. The first cell's right sampling edge is **472.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
-| 562.5 | B response accepted | RESP=0 |
-| 577.5 | RLAST accepted | RESP=0 |
-| 622.5 | AR accepted | ID=0; address=0x20000020; 4 beats x 4 B; INCR |
-| 642.5 | AW accepted | ID=0; address=0x30001002; 2 beats x 4 B; INCR |
-| 642.5 | RLAST accepted | RESP=0 |
-| 652.5 | WLAST accepted | WSTRB=0xf0 |
-| 657.5 | B response accepted | RESP=0 |
+| 492.5 | B response accepted | RESP=0 |
+| 507.5 | RLAST accepted | RESP=0 |
+| 542.5 | AR accepted | ID=0; address=0x20000020; 4 beats x 4 B; INCR |
+| 562.5 | AW accepted | ID=0; address=0x30001002; 2 beats x 4 B; INCR |
+| 562.5 | RLAST accepted | RESP=0 |
+| 572.5 | WLAST accepted | WSTRB=0xf0 |
+| 577.5 | B response accepted | RESP=0 |
 
 Useful constant context: `ccr_o=00054035`; `arready=1 (no back-pressure)`; `awready=1 (no back-pressure)`; `wready=1 (no back-pressure)`.
 

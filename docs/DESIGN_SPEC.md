@@ -5,7 +5,7 @@
 | Tên IP | `axi_dma330` (top), `dma330_core` (lõi đơn clock) |
 | Tham chiếu | Arm CoreLink DMA-330 (PL330) TRM — tập lệnh, register map, giao thức peripheral |
 | Ngôn ngữ | SystemVerilog-2012 (synthesizable) |
-| Phiên bản tài liệu | 1.7: sửa conformance TRM (load-lock, discontinuity, debug real-time, quyền APB NS, precise CCR fault, CR1); pipeline AW/W, hit-under-miss, swap 128 bit trên bus hẹp, cache line 4 byte |
+| Phiên bản tài liệu | 1.8: channel bỏ chu kỳ FETCH khi instruction nằm trong line buffer; CSR vẫn dùng đúng mã trạng thái TRM. Kế thừa các sửa conformance và datapath của 1.7. |
 | Tài liệu liên quan | [VERIFICATION_PLAN.md](VERIFICATION_PLAN.md), [TESTCASES.md](TESTCASES.md), [ARCHITECTURE.md](ARCHITECTURE.md) (tóm tắt tiếng Anh) |
 
 Quy ước: tên tín hiệu, thanh ghi, lệnh giữ nguyên tiếng Anh. `aclk` là clock của lõi DMA và cổng AXI (trong `dma330_core` gọi là `clk`). "Thread" là một luồng thực thi chương trình (manager hoặc channel). "S"/"NS" là secure/non-secure. Số hex viết `0x...`, số bit viết `[msb:lsb]`.
@@ -303,7 +303,8 @@ SVA kiểm tra payload ổn định trong lúc handshake (`CDC_DATA_STABLE`).
 Trạng thái kiến trúc của mỗi kênh: `PC (CPC)`, `SAR`, `DAR`, `CCR`, `LC0`, `LC1` (8 bit), `NS`, cờ `request_type` (single/burst), cờ `request_last`, `wakeup_number`, `FTR`.
 
 ```
- C_STOPPED --DMAGO--> C_FETCH --> C_EXEC --> C_UPDATING_PC --> C_FETCH
+ C_STOPPED --DMAGO--> C_FETCH --> C_EXEC --> C_UPDATING_PC --> C_EXEC (line-buffer hit)
+                                                    \---------> C_FETCH (chờ fetch)
                                    |--DMAWFE--> C_WFE --event--> C_UPDATING_PC
                                    |--DMAWFP--> C_WFP --request--> C_UPDATING_PC
                                    |--DMARMB/WMB--> C_BARRIER --idle--> C_UPDATING_PC
@@ -317,7 +318,7 @@ Trạng thái kiến trúc của mỗi kênh: `PC (CPC)`, `SAR`, `DAR`, `CCR`, `
 `dp idle` nghĩa là kênh không còn request nào trong RQ/WQ, không còn burst đọc hoặc ghi nào outstanding.
 
 Đặc điểm thực thi:
-* **Updating PC** (TRM 2.3.4): lệnh hoàn tất hoặc được đánh thức chuyển sang `C_UPDATING_PC`; tại đây `CSR[3:0] = 3`, tính PC tuần tự hoặc nhánh `DMALPEND/DMALPFE`, rồi commit PC và chuyển sang `C_FETCH`. Manager có pha tương ứng `M_UPDATING_PC` và `DSR[3:0] = 3`. Fetch được khởi động ngay trong pha tính PC để không thêm chu kỳ nghỉ bắt buộc. Lệnh debug của manager không tiến PC chương trình và không đi qua pha này.
+* **Updating PC** (TRM 2.3.4): lệnh hoàn tất hoặc được đánh thức chuyển sang `C_UPDATING_PC`; tại đây `CSR[3:0] = 3`, tính PC tuần tự hoặc nhánh `DMALPEND/DMALPFE`, rồi commit PC. Fetch được khởi động cùng chu kỳ: nếu instruction kế tiếp nằm trọn trong line buffer, fetch unit đăng ký instruction ở cạnh commit và channel chuyển thẳng sang `C_EXEC`; các trường hợp còn lại chuyển sang `C_FETCH` để chờ kết quả. `C_FETCH` vẫn báo `Executing` hoặc `Cache miss` theo trạng thái refill, không tạo mã CSR mới. Manager có pha tương ứng `M_UPDATING_PC` và `DSR[3:0] = 3`; đường timing manager chưa áp dụng bypass này. Lệnh debug của manager không tiến PC chương trình và không đi qua pha này.
 * **FETCH và Cache miss**: `C_FETCH`/`M_FETCH` là trạng thái nội bộ. DSR/CSR chỉ báo mã 2 khi shared I-cache đang phát/chờ AR hoặc nhận R của refill cho đúng thread. Local-buffer miss, chờ phân xử, shared-cache lookup hit và ghép lệnh vắt line không tự tạo mã 2. Các chu kỳ fetch còn lại báo mã 1 (Executing).
 * **LD/ST được issue, không thực thi tại chỗ.**
   * `DMALD`: đẩy một mô tả burst (`xfer_t`) vào RQ của kênh, tăng `SAR` (nếu INCR) theo số byte của burst, rồi đi tiếp sang lệnh sau.
@@ -333,7 +334,7 @@ Trạng thái kiến trúc của mỗi kênh: `PC (CPC)`, `SAR`, `DAR`, `CCR`, `
   * `DMALP` nạp `LCx = iter-1`.
   * `DMALPEND` giảm `LCx` và nhảy lùi `jump` byte nếu `LCx ≠ 0`.
   * `DMALPFE` nhảy lùi cho tới khi peripheral báo `drlast`.
-* Mỗi lệnh mất khoảng 3 chu kỳ `aclk` khi trúng line buffer (FETCH → insn valid → EXEC).
+* Với lệnh liên tiếp trúng line buffer, channel cần khoảng 2 chu kỳ `aclk` mỗi lệnh (`EXEC` → `UPDATING_PC`); đường cold fetch hoặc lệnh vắt line vẫn qua `C_FETCH`. Manager hiện cần khoảng 3 chu kỳ mỗi lệnh trúng line buffer.
 * **Bảo vệ giao thức AXI**: khi thực thi `DMALD`/`DMAST`, kênh kiểm tra burst sắp phát. Burst bị từ chối và kênh lỗi `ch_rdwr_err` (FTR[7]) nếu:
   * burst size lớn hơn độ rộng bus;
   * kênh NS yêu cầu truy cập secure (ở trên);

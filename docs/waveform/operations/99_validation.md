@@ -6,7 +6,13 @@
 
 The GitHub guide contains 24 operation walkthroughs with 37 actual WaveDrom SVGs and 37 same-name JSON files. Background and conventions are included in this directory. VCDs, the superseded exhaustive gallery, authoring scripts and new teaching tests are retained locally rather than published.
 
-These figures correspond to the current workspace RTL, including the RTL fixes in this release. [Source-revision metadata](source_revision.json) records 97 frozen RTL/testbench/SVA/model inputs and 73 PASS runs. The source hashes identify the exact simulation baseline. Every illustration identifies its source run and time window. Each JSON's `_meta` records source signal paths, pre-edge values, sampling times, display masks, omitted context and the source-VCD SHA-256. The SVG also records the paired JSON hash. These metadata preserve a connection to the recorded simulation without distributing its VCD.
+These figures correspond to the current workspace RTL, including the RTL fixes in this release. [Source-revision metadata](source_revision.json) records 98 frozen RTL/testbench/SVA/model inputs and 73 PASS runs. The source hashes identify the exact simulation baseline. Every illustration identifies its source run and time window. Each JSON's `_meta` records source signal paths, pre-edge values, sampling times, display masks, omitted context and the source-VCD SHA-256. The SVG also records the paired JSON hash. These metadata preserve a connection to the recorded simulation without distributing its VCD.
+
+## Optimized channel fast path
+
+These images were regenerated after the local-line-buffer bypass change. Operation 21 contrasts direct UPC -> EXEC with UPC -> FETCH. Internal phase, architectural CSR name/code, fast-hit qualification, registered CPC and fetch target are separate signals. No extra software status is introduced.
+
+The short-copy trace contains 7 direct UPC-to-EXEC transitions. The loop trace contains 23 direct transitions and 3 fallback-to-FETCH transitions. Independent VCD checks validated the fast-hit decision, PC commit target and CSR mapping at these transitions; the counts are observations for these traces, not a throughput promise.
 
 ## Validation record
 
@@ -15,7 +21,7 @@ The following results were measured during authoring; they are not checks a read
 | Check | Recorded result |
 |---|---|
 | Original simulations | 73 PASS runs, using the original UVM environment and unit tests plus new directed teaching scenarios |
-| Displayed sample consistency | 15,807 pre-edge samples compared with local source VCDs after the documented masks |
+| Displayed sample consistency | 17,288 pre-edge samples compared with local source VCDs after the documented masks |
 | WaveDrom outputs | All 37 SVGs rendered from the paired JSON and successfully rasterized for visual review |
 | Sampling, encoding and color tests | 7 tests passed |
 | Source freeze | All 85 original RTL and pre-existing testbench source hashes unchanged |

@@ -2,11 +2,11 @@
   "signal": [
     {
       "name": "sample clock",
-      "wave": "p....................|p."
+      "wave": "p..................|p."
     },
     {
       "name": "source cycle",
-      "wave": "=====================|==",
+      "wave": "===================|==",
       "data": [
         "0",
         "1",
@@ -27,8 +27,6 @@
         "16",
         "17",
         "18",
-        "19",
-        "20",
         "26",
         "27"
       ]
@@ -37,20 +35,17 @@
       "Thread",
       {
         "name": "ch0.state (internal)",
-        "wave": "8578574.....85785762.|2.",
+        "wave": "487874......878762.|2.",
         "data": [
+          "CFG",
           "UPC",
-          "FET",
           "EX",
           "UPC",
-          "FET",
           "EX",
           "BAR",
           "UPC",
-          "FET",
           "EX",
           "UPC",
-          "FET",
           "EX",
           "END",
           "STOP",
@@ -58,9 +53,10 @@
         ]
       },
       {
-        "name": "ch0.CSR status",
-        "wave": "87.87.4.....87.87.62.|2.",
+        "name": "ch0.CSR state (Arm)",
+        "wave": "487874......878762.|2.",
         "data": [
+          "BAR",
           "UPC",
           "RUN",
           "UPC",
@@ -73,11 +69,30 @@
           "END",
           "STOP",
           "STOP"
+        ]
+      },
+      {
+        "name": "ch0.CSR code (Arm)",
+        "wave": "487874......878762.|2.",
+        "data": [
+          "5",
+          "3",
+          "1",
+          "3",
+          "1",
+          "5",
+          "3",
+          "1",
+          "3",
+          "1",
+          "9",
+          "0",
+          "0"
         ]
       },
       {
         "name": "opcode (when EXEC)",
-        "wave": "x.7x.4x.......6x.6x..|x.",
+        "wave": "x.7x4x.......6x6x..|x.",
         "data": [
           "STZ",
           "WMB",
@@ -90,38 +105,38 @@
       "AXI write",
       {
         "name": "AW.valid (RDY=1)",
-        "wave": "0...10...............|0."
+        "wave": "0...10.............|0."
       },
       {
         "name": "AW.addr",
-        "wave": "x...5x...............|x.",
+        "wave": "x...5x.............|x.",
         "data": [
           "A1"
         ]
       },
       {
         "name": "wvalid (RDY=1)",
-        "wave": "0....1...0...........|0."
+        "wave": "0....1...0.........|0."
       },
       {
         "name": "wdata",
-        "wave": "x....5...x...........|x.",
+        "wave": "x....5...x.........|x.",
         "data": [
           "0000000000000000"
         ]
       },
       {
         "name": "wlast",
-        "wave": "x....0..1x...........|x."
+        "wave": "x....0..1x.........|x."
       },
       {
         "name": "bvalid (RDY=1)",
-        "wave": "0.........10.........|0."
+        "wave": "0.........10.......|0."
       }
     ],
     {
       "name": "irq bitmap",
-      "wave": "2..............6.2...|2.",
+      "wave": "2.............6.2..|2.",
       "data": [
         "0000",
         "0001",
@@ -134,7 +149,7 @@
     "text": "Fill memory with DMASTZ - 1"
   },
   "foot": {
-    "text": "1 cell = 5 ns; first RIGHT edge = 377.5 ns; | = omitted idle cycles"
+    "text": "1 cell = 5 ns; first RIGHT edge = 367.5 ns; | = omitted idle cycles"
   },
   "config": {
     "hscale": 1,
@@ -147,9 +162,11 @@
     "exclude_instruction_fetch": true,
     "clock_source": "dma_wave_top.tb.aclk",
     "cycle_ns": 5.0,
-    "first_right_edge_ns": 377.5,
-    "last_right_edge_ns": 512.5,
+    "first_right_edge_ns": 367.5,
+    "last_right_edge_ns": 502.5,
     "right_edge_ns": [
+      367.5,
+      372.5,
       377.5,
       382.5,
       387.5,
@@ -167,19 +184,15 @@
       447.5,
       452.5,
       457.5,
-      462.5,
-      467.5,
-      472.5,
-      477.5,
       null,
-      507.5,
-      512.5
+      497.5,
+      502.5
     ],
     "idle_gaps": [
       {
-        "after_ns": 477.5,
-        "before_ns": 507.5,
-        "omitted_samples": 5
+        "after_ns": 457.5,
+        "before_ns": 497.5,
+        "omitted_samples": 7
       }
     ],
     "omitted_signals": [
@@ -363,11 +376,10 @@
         "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.state",
         "width": 4,
         "samples": [
+          "1011",
           "1010",
-          "1",
           "10",
           "1010",
-          "1",
           "10",
           "101",
           "101",
@@ -375,11 +387,10 @@
           "101",
           "101",
           "101",
+          "101",
           "1010",
-          "1",
           "10",
           "1010",
-          "1",
           "10",
           "110",
           "0",
@@ -391,27 +402,55 @@
         "gate": null
       },
       {
-        "name": "ch0.CSR status",
+        "name": "ch0.CSR state (Arm)",
         "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.csr[3:0]",
         "width": 4,
         "samples": [
-          "0011",
-          "0001",
-          "0001",
-          "0011",
-          "0001",
-          "0001",
-          "0101",
-          "0101",
-          "0101",
-          "0101",
-          "0101",
           "0101",
           "0011",
           "0001",
+          "0011",
+          "0001",
+          "0101",
+          "0101",
+          "0101",
+          "0101",
+          "0101",
+          "0101",
+          "0101",
+          "0011",
           "0001",
           "0011",
           "0001",
+          "1001",
+          "0000",
+          "0000",
+          null,
+          "0000",
+          "0000"
+        ],
+        "gate": null
+      },
+      {
+        "name": "ch0.CSR code (Arm)",
+        "path": "dma_wave_top.tb.u_dut.u_core.g_ch[0].u_channel.csr[3:0]",
+        "width": 4,
+        "samples": [
+          "0101",
+          "0011",
+          "0001",
+          "0011",
+          "0001",
+          "0101",
+          "0101",
+          "0101",
+          "0101",
+          "0101",
+          "0101",
+          "0101",
+          "0011",
+          "0001",
+          "0011",
           "0001",
           "1001",
           "0000",
@@ -431,7 +470,6 @@
           null,
           "1100",
           null,
-          null,
           "10011",
           null,
           null,
@@ -442,7 +480,6 @@
           null,
           null,
           "110100",
-          null,
           null,
           "0",
           null,
@@ -464,8 +501,6 @@
           "0",
           "0",
           "1",
-          "0",
-          "0",
           "0",
           "0",
           "0",
@@ -512,8 +547,6 @@
           null,
           null,
           null,
-          null,
-          null,
           null
         ],
         "gate": "dma_wave_top.tb.axi.awvalid"
@@ -532,8 +565,6 @@
           "1",
           "1",
           "1",
-          "0",
-          "0",
           "0",
           "0",
           "0",
@@ -576,8 +607,6 @@
           null,
           null,
           null,
-          null,
-          null,
           null
         ],
         "gate": "dma_wave_top.tb.axi.wvalid"
@@ -596,8 +625,6 @@
           "0",
           "0",
           "1",
-          null,
-          null,
           null,
           null,
           null,
@@ -638,8 +665,6 @@
           "0",
           "0",
           "0",
-          "0",
-          "0",
           null,
           "0",
           "0"
@@ -665,10 +690,8 @@
           "0",
           "0",
           "0",
-          "0",
           "1",
           "1",
-          "0",
           "0",
           "0",
           "0",
@@ -747,9 +770,9 @@
     "operation": "07_zero",
     "number": 1,
     "source_window_ns": [
-      377.5,
-      517.5
+      367.5,
+      507.5
     ],
-    "source_vcd_sha256": "bfd905c00beb249a142a440d4b222998df1f9ad4a8392e08a6ee48d1fb53def3"
+    "source_vcd_sha256": "fefb5a874dee493f659a315b19427a6ce14ad56c5a0927bcf6e36a44a628b0fb"
   }
 }

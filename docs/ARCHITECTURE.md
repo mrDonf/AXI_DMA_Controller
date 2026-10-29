@@ -73,7 +73,8 @@ logic between domains. SVA checks handshake payload stability.
 
 ### 4.1 Channel thread (`dma_channel`)
 ```
-STOPPED --DMAGO--> FETCH --> EXEC --> UPDATING_PC --> FETCH
+STOPPED --DMAGO--> FETCH --> EXEC --> UPDATING_PC --> EXEC (local line hit)
+                                           \---------> FETCH (fetch pending)
                                +--> WFE        (DMAWFE)
                      ^               +--> WFP        (DMAWFP)
                      |               +--> BARRIER    (DMARMB / DMAWMB)

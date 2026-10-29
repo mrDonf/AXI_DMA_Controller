@@ -1,5 +1,5 @@
 {
-  "description": "Frozen workspace inputs for this RTL-fix release. Source files were frozen before simulation and not modified by documentation work. Earlier source traces are excluded.",
+  "description": "Regenerated from current optimized-channel RTL: UPC directly selects EXEC for a complete local-line-buffer instruction, otherwise FETCH. Current workspace source hashes are the baseline; old recordings are excluded.",
   "source_sha256": {
     "rtl/cdc/dma_apb_async_bridge.sv": "60dcace1eb1161cfa91e47d050e00600f9fb69ee4cfd337ab80f20371b4eab97",
     "rtl/cdc/dma_cdc_handshake.sv": "99d271901561262a17e20965f764c80dfb0c9ae631a6f528d251a962ebf172c4",
@@ -10,12 +10,12 @@
     "rtl/common/dma_sync_fifo.sv": "2844ad72a4899958b0a2790a915444c6a870794e42ab97469c8bb4caf9be98ca",
     "rtl/core/dma330_core.sv": "fa83ef42ffb5f9168f6fa9af610cf5e0932f27d319442980e98db9322d37a282",
     "rtl/core/dma330_pkg.sv": "d82235ec8fa8f6ef76aa393e8d2f9eb6fe8fd8532b077bce358c8daede5de0b8",
-    "rtl/core/dma_channel.sv": "35c002bb91ebb94ef7d478cf582aa907ae3cac17d91b020a5a4ab8b02097c097",
+    "rtl/core/dma_channel.sv": "7c29074d4381e8fd8771b6c0c4d90dfd82428116aba4e850304da0f809c30be7",
     "rtl/core/dma_datapath.sv": "6459ff4d4e1c5ee2f9f369db61440160841949943af126648f3e8d2bb7ec5d71",
     "rtl/core/dma_event_irq.sv": "76886dc343043c860583c5c015111d60c9163700ce0edfff6b660d7ee6b01c47",
-    "rtl/core/dma_fetch_unit.sv": "f32e1b7aa76aa623bd54688c2b3c032a80609c9e387d9bf74cc1d934192a59cf",
+    "rtl/core/dma_fetch_unit.sv": "760bf1b6844091512c20c4337b7756f4013230b94fc8dd921c91ac475c6b8c9e",
     "rtl/core/dma_icache.sv": "7999268afb835abbed47f9aeee1b445834a575f16c52d87f48b0ef716ce57040",
-    "rtl/core/dma_manager.sv": "3506d79ad9bd4efe89070411351ee7565df332f8e7800c3a8dbf3cc3d48e4f68",
+    "rtl/core/dma_manager.sv": "8945650be75de38576b2926224eb08a5ac28d6595be07752bd9cb5bfaa8865a5",
     "rtl/core/dma_mfifo.sv": "a55e17da47463615ee1a3eb225d8c1212b92590a479b0daf65c1d264f7c560e5",
     "rtl/core/dma_periph_ctrl.sv": "1cf7230bae900b94cb3f7a1d39b49ed6adb8186e8bec2414e4c33399cbd21497",
     "rtl/core/dma_qchannel.sv": "cc5d67c2cdad40b9ac81ac2f9af6205f59dabc3b1deeb5cd12f6136a9deeed42",
@@ -56,9 +56,9 @@
     "tb/seq/dma_traffic_vseq.sv": "182f34b0e54879f9d09379b22ad2cf4430f97a010b3f058cb26260818a92f1fa",
     "tb/tb_top.sv": "894d500f5ff4cd5b4fac5c8ad36fe8b4b8926ec3e78a5213b2961d12ea45e534",
     "tb/tests/dma_test_pkg.sv": "ebff0f3fbff117852586d73dc0641eb64d28e27ca983be851ee4176a2c53ae0e",
-    "tb/unit/dma_fetch_unit_tb.sv": "224809920fc25e33dc4758aa6908adc36b2afa3d96404c5e825e98182fafa122",
+    "tb/unit/dma_fetch_unit_tb.sv": "0a5ec47f7b14f9172bb96da0e28afbfdbb8428d3f883303f041eebb539a1e0f4",
     "tb/unit/dma_icache_tb.sv": "77a016ed68c58acd9333b6eb4fea11367901d102ba5d4f8c68a0aea47e596006",
-    "tb/unit/dma_thread_status_tb.sv": "51bd584f2b9d71660fa3c6521a4e52e2f31c23d9b0962a352f334e10bef3d5e1",
+    "tb/unit/dma_thread_status_tb.sv": "e8caf70adcbf7b7975188845be67ed15688e4ddb37a24e3e44535e47fdeba287",
     "tb/unit/dma_wr_engine_tb.sv": "fdc72eb9f6a5cdea8465a59cc9f7cf791de9138b3b344234148b16f8568698ee",
     "tb/vip/apb/apb_agent.sv": "513a214eb5d68a7eb71389048cce651810dc7da04d5fb72afa46ce6682d54ed2",
     "tb/vip/apb/apb_config.sv": "73a623391a09a104194fcab143c86e640ef575329b2df13830bfae78d48f6c43",
@@ -87,6 +87,7 @@
     "tb/vip/periph/periph_monitor.sv": "51c1213b2756cd379bef22b00008f7bd52582c08c9b1ecb39c4b692b67b7e25a",
     "tb/vip/periph/periph_seq_lib.sv": "bdd7ef4c80ea13f2ad566dbad07d9339cc2e9e6f7437a8016d821631f34c7ea3",
     "tb/waveform/dma_wave_pkg.sv": "b635e6bcd73530c0ac54fb55d772e526c3150c096e7e876f905856af6b67f89f",
+    "tb/waveform/dma_wave_probe_registration.sv": "ab41b9639de82eedd16c29863f1db91a20b1e7093b105dfd5724fa9e08fb8ce9",
     "tb/waveform/dma_wave_top.sv": "b04b02d79db42419128915d65344e17ac79174cb37c2780c59558851f04e394b",
     "sva/apb_slave_sva.sv": "2090f3db787f279be774b9046ba6b476321805f4f19f682a24b43dc2bd524423",
     "sva/axi4_master_sva.sv": "400122712fb90b7504217b01e96ca7896774852d0428b872d38e5ef04a1daa27",
@@ -541,5 +542,15 @@
   ],
   "operations": 24,
   "waveform_pairs": 37,
-  "displayed_samples_checked": 15807
+  "displayed_samples_checked": 17288,
+  "fast_path_checks": {
+    "direct_copy32": {
+      "direct_exec": 7,
+      "fetch_wait": 0
+    },
+    "direct_loop2d": {
+      "direct_exec": 23,
+      "fetch_wait": 3
+    }
+  }
 }

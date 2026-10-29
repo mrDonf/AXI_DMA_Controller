@@ -42,20 +42,21 @@ Group brackets separate the thread, shared storage and active interfaces. Inacti
 
 [Open SVG at full size](../svg/12_request_types_1.svg) | [WaveDrom JSON](../wavejson/12_request_types_1.json)
 
-Source: `direct_periph_mixed`. Core/unit cycle snapshots cover the selected **442.5..602.5 ns** interval. The first cell's right sampling edge is **442.5 ns**.
+Source: `direct_periph_mixed`. Core/unit cycle snapshots cover the selected **412.5..572.5 ns** interval. The first cell's right sampling edge is **412.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
-| 442.5 | P0 DR accepted | type=1 (burst); measured on peripheral clock |
-| 442.5 | WFP grant | 0x1 |
-| 487.5 | AR accepted | ID=0; address=0x10000000; 2 beats x 8 B; INCR |
-| 502.5 | RLAST accepted | RESP=0 |
-| 517.5 | AW accepted | ID=0; address=0x40000000; 2 beats x 8 B; FIXED |
-| 527.5 | WLAST accepted | WSTRB=0xff |
-| 537.5 | B response accepted | RESP=0 |
-| 542.5 | P0 DA accepted | type=0 (single); measured on peripheral clock |
-| 577.5 | P0 DR accepted | type=1 (burst); measured on peripheral clock |
-| 577.5 | WFP grant | 0x1 |
+| 412.5 | P0 DR accepted | type=2 (flush); measured on peripheral clock |
+| 422.5 | P0 DR accepted | type=1 (burst); measured on peripheral clock |
+| 422.5 | WFP grant | 0x1 |
+| 457.5 | AR accepted | ID=0; address=0x10000000; 2 beats x 8 B; INCR |
+| 472.5 | RLAST accepted | RESP=0 |
+| 482.5 | AW accepted | ID=0; address=0x40000000; 2 beats x 8 B; FIXED |
+| 492.5 | WLAST accepted | WSTRB=0xff |
+| 497.5 | B response accepted | RESP=0 |
+| 502.5 | P0 DA accepted | type=0 (single); measured on peripheral clock |
+| 537.5 | P0 DR accepted | type=1 (burst); measured on peripheral clock |
+| 537.5 | WFP grant | 0x1 |
 
 Useful constant context: `arready=1 (no back-pressure)`; `awready=1 (no back-pressure)`; `wready=1 (no back-pressure)`.
 
@@ -65,18 +66,18 @@ Useful constant context: `arready=1 (no back-pressure)`; `awready=1 (no back-pre
 
 [Open SVG at full size](../svg/12_request_types_2.svg) | [WaveDrom JSON](../wavejson/12_request_types_2.json)
 
-Source: `direct_periph_mixed`. Core/unit cycle snapshots cover the selected **697.5..857.5 ns** interval. The first cell's right sampling edge is **697.5 ns**.
+Source: `direct_periph_mixed`. Core/unit cycle snapshots cover the selected **632.5..792.5 ns** interval. The first cell's right sampling edge is **632.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
-| 717.5 | P0 DR accepted | type=0 (single); measured on peripheral clock |
-| 717.5 | WFP grant | 0x1 |
-| 747.5 | AR accepted | ID=0; address=0x10000020; 1 beats x 8 B; INCR |
-| 757.5 | RLAST accepted | RESP=0 |
-| 777.5 | AW accepted | ID=0; address=0x40000000; 1 beats x 8 B; FIXED |
-| 782.5 | WLAST accepted | WSTRB=0xff |
-| 797.5 | B response accepted | RESP=0 |
-| 802.5 | P0 DA accepted | type=0 (single); measured on peripheral clock |
+| 657.5 | P0 DR accepted | type=0 (single); measured on peripheral clock |
+| 657.5 | WFP grant | 0x1 |
+| 682.5 | AR accepted | ID=0; address=0x10000020; 1 beats x 8 B; INCR |
+| 687.5 | RLAST accepted | RESP=0 |
+| 702.5 | AW accepted | ID=0; address=0x40000000; 1 beats x 8 B; FIXED |
+| 707.5 | WLAST accepted | WSTRB=0xff |
+| 727.5 | B response accepted | RESP=0 |
+| 732.5 | P0 DA accepted | type=0 (single); measured on peripheral clock |
 
 Useful constant context: `arready=1 (no back-pressure)`; `awready=1 (no back-pressure)`; `wready=1 (no back-pressure)`.
 

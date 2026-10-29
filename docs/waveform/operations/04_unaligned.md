@@ -40,18 +40,18 @@ Group brackets separate the thread, shared storage and active interfaces. Inacti
 
 [Open SVG at full size](../svg/04_unaligned_1.svg) | [WaveDrom JSON](../wavejson/04_unaligned_1.json)
 
-Source: `direct_unaligned`. Core/unit cycle snapshots cover the selected **402.5..562.5 ns** interval. The first cell's right sampling edge is **402.5 ns**.
+Source: `direct_unaligned`. Core/unit cycle snapshots cover the selected **387.5..547.5 ns** interval. The first cell's right sampling edge is **387.5 ns**.
 
 | Exact VCD time (ns) | Milestone | Meaning |
 |---:|---|---|
-| 422.5 | AR accepted | ID=0; address=0x10000003; 2 beats x 8 B; INCR |
-| 432.5 | RLAST accepted | RESP=0 |
-| 462.5 | AR accepted | ID=0; address=0x10000010; 6 beats x 1 B; INCR |
-| 492.5 | RLAST accepted | RESP=0 |
-| 502.5 | AW accepted | ID=0; address=0x20000005; 3 beats x 8 B; INCR |
-| 517.5 | WLAST accepted | WSTRB=0xff |
-| 527.5 | B response accepted | RESP=0 |
-| 547.5 | IRQ bitmap | 0x1 |
+| 407.5 | AR accepted | ID=0; address=0x10000003; 2 beats x 8 B; INCR |
+| 422.5 | RLAST accepted | RESP=0 |
+| 447.5 | AR accepted | ID=0; address=0x10000010; 6 beats x 1 B; INCR |
+| 482.5 | RLAST accepted | RESP=0 |
+| 492.5 | AW accepted | ID=0; address=0x20000005; 3 beats x 8 B; INCR |
+| 507.5 | WLAST accepted | WSTRB=0xff |
+| 517.5 | B response accepted | RESP=0 |
+| 532.5 | IRQ bitmap | 0x1 |
 
 Full values for the short labels in this picture (matching D labels mean matching data):
 

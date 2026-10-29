@@ -35,6 +35,7 @@ module dma_fetch_unit
   output logic [INSN_W-1:0]         insn,         // byte 0 = opcode
   output logic                      fetch_err,
   output logic                      miss,         // front-end pending, NOT architectural Cache miss
+  output logic                      fast_hit,     // instruction registers at this edge
 
   // Instruction cache port
   output logic                      ic_req,
@@ -69,6 +70,10 @@ module dma_fetch_unit
   assign hit          = lb_valid && (lb_tag == pc_tag);
   assign opcode       = lb_data[pc_off*8 +: 8];
   assign crosses_line = (int'(pc_off) + int'(insn_len(opcode))) > LINE_BYTES;
+  // The thread may enter EXEC on the same edge that registers this local-hit
+  // instruction. All suppression conditions match the F_IDLE delivery path.
+  assign fast_hit = (fstate == F_IDLE) && fetch_req && !insn_valid &&
+                    !fetch_err && !inv && hit && !crosses_line;
 
   assign miss    = (fstate != F_IDLE);
   assign ic_req  = (fstate != F_IDLE);
