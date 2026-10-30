@@ -2,7 +2,7 @@
 
 **Audience:** RTL and verification engineers, firmware developers, and SoC integrators.
 
-**Reading time:** sections 1–16 are the 20–25 minute overview. Sections 17–22 are an extended technical reference for focused study and lookup.
+**Reading time:** sections 1–16 are the 20–25 minute overview. Sections 17–26 are an extended technical reference for focused study and lookup.
 
 **Architectural reference:** Arm DMA Controller DMA-330 r1p2 Technical Reference Manual, DDI 0424D.
 
@@ -32,6 +32,8 @@ Three levels of information are distinguished throughout:
 The Arm manual defines the architectural contract. The RTL determines this implementation's exact behavior. A selected waveform demonstrates an observed execution; it does not establish a universal cycle count or prove equivalence to the Arm macro.
 
 For detailed work, continue with [microcode and binary encodings](#17-microcode-reference-and-binary-encodings), [complete register map](#18-register-map-access-and-bit-fields), [CCR programming](#19-ccr-programming-byte-accounting-and-discontinuities), [software sequences](#20-software-sequences-and-worked-register-values), [waveform walkthroughs](#21-waveform-walkthroughs-from-the-current-rtl), and [reference coverage](#22-specification-coverage-and-confluence-publication).
+
+For the relationships between blocks, read [manager–channel coordination](#23-how-the-manager-and-channel-threads-work-together), [DMAC transaction and ownership stages](#24-dmac-operation-as-a-pipeline-of-commitments), [Arm MFIFO resource requirements](#25-arm-resource-sharing-and-forward-progress), and [the specification-to-integration contract](#26-applying-the-arm-specification-to-a-complete-system).
 
 ### 1.1 How to use the reference chapters
 
@@ -1152,7 +1154,309 @@ If a single long page becomes difficult to navigate, keep this file as the maste
 | DMA-330 Register Reference | Sections 18–19 | What do the register fields mean, and what can software modify? |
 | Programming and Diagnosis | Section 20 | How do I launch, observe, cancel and diagnose a program? |
 | Timing Walkthroughs | Section 21 | Which observed transitions demonstrate the mechanism? |
+| Manager and Channel Coordination | Section 23 | How do boot/debug commands launch and synchronize independent contexts? |
+| Dataflow, Resources and Integration | Sections 24–26 | What orders progress, what storage is required, and which system assumptions apply? |
 
 Preserve the tables and code blocks. Upload the six SVGs as attachments and retain their numbering/captions; attach matching JSON files for readers who need to edit the drawings. Replace repository-relative links with the corresponding page or attachment links when publishing. Put the Arm document revision and the RTL source-revision link near the page header so a future update does not silently mix different baselines.
 
 The [source-revision record](waveform/operations/source_revision.json) describes the recorded waveform baseline. The [full operation index](waveform/operations/README.md) remains the place to explore cases beyond this reference chapter, including unaligned transfers, 4 KB splitting, events, sharing, cache cancellation, CDC, endian variants and low power.
+
+## 23. How the manager and channel threads work together
+
+### 23.1 A control thread and independent transfer threads
+
+In DMA-330, the manager is a hardware **control-program context**. Channel threads are hardware **transfer-program contexts**. The manager starts and coordinates work, while a channel executes the address setup, loops, loads, stores, peripheral waits and barriers that implement its transfer.
+
+The architectural foundation is TRM §§2.3–2.5, the manager/channel register definitions, and the DMAGO/DMAKILL instruction descriptions. Signal handshakes, debug-return bookkeeping and fast-path differences below describe the current RTL; the conceptual sequence is not a new cycle-accurate specification of the Arm macro.
+
+The manager is not a CPU running an operating-system scheduler. It does not save channel registers into memory each time another channel progresses. Each channel already has persistent hardware context. Nor is the manager an extra payload channel: it has no SAR/DAR/CCR transfer stream of its own.
+
+| Responsibility | Manager | Channel thread |
+|---|---|---|
+| Program counter and instruction context | DPC and manager fetch context | CPCn and the channel's fetch context. |
+| Status and security | DSR, including DNS | CSRn, including CNS. |
+| Fault diagnosis | FTRD / FSRD | FTRn / FSRC; FARn is an extension. |
+| Start another channel | Execute DMAGO | DMAGO is not a channel instruction. |
+| Configure and move payload | No channel load/store datapath context | DMAMOV, LD/ST, loops and address arithmetic. |
+| Event synchronization | DMAWFE / DMASEV | DMAWFE / DMASEV. |
+| Peripheral pacing | Not a manager transfer operation | DMAWFP, LDP/STP and DMAFLUSHP. |
+| Normal finish | Stop the manager's instruction program | Complete the channel's data work, then stop. |
+
+The shared interconnect, instruction cache, event unit and datapath connect these contexts. A manager instruction can launch channel 1 while channel 0 is waiting for read responses. The thread programs proceed independently, subject to shared-resource arbitration and explicit synchronization.
+
+### 23.2 Two ways to supply manager instructions
+
+**Boot program:** after reset, boot configuration selects whether the manager fetches from boot_addr or stays stopped. With boot_from_pc enabled, the memory at that address contains manager instructions. Those instructions can launch several channel programs, wait for their events and issue a final notification without a new APB command for each launch. The boot program must be accessible with the manager's configured security attributes.
+
+**Debug instruction:** software writes an encoded instruction through DBGINST0/1 and requests execution through DBGCMD. The register bank supplies the instruction bytes; there is no requirement that the manager first fetch that debug instruction from boot memory. The channel program named by DMAGO is still fetched from memory.
+
+The register interface can therefore be active while the manager is Stopped. A stopped manager is available for debug control; it is not a disabled DMAC. Conversely, boot execution does not turn the debug interface into an unrestricted second instruction stream. TRM §2.5.1 restricts real-time debug operations to DMAGO, DMASEV and DMAKILL. This RTL also accepts debug DMANOP, an implementation allowance that portable software should not require.
+
+### 23.3 Launch sequence across the actual RTL blocks
+
+The following is a conceptual sequence, not a waveform or a fixed-cycle timing guarantee:
+
+```text
+CPU / APB          dma_regs             dma_manager          channel n
+    |                  |                    |                    |
+    | stage I0/I1 ----->|                    |                    |
+    | DBGCMD=0 ------->| latch instruction  |                    |
+    |                  | busy=1, dbg_valid->| capture/validate   |
+    |                  |                    | execute DMAGO      |
+    |                  |                    |--go_valid[n]------>|
+    |                  |                    |--go_pc, go_ns----->| if STOPPED:
+    |                  |<----dbg_done-------|                    | capture launch
+    |                  | clear debug busy  |                    | enter FETCH
+    |                  |                    | return/resume      | fetch program
+    |                  |                    |                    | execute LD/ST
+    |                  |                    |                    | complete later
+```
+
+For an authorized manager command, `dma_regs` latches the pending instruction and maintains the debug-valid request until the manager retires it. The manager selects the debug instruction instead of fetched program bytes, validates the channel operand and security, and asserts a one-hot `go_valid[n]` with `go_pc` and `go_ns`.
+
+The core connects those signals directly to the channels. A selected channel accepts the launch only in C_STOPPED. On that edge it loads PC/NS, clears request/fault/address bookkeeping, requests its own instruction-cache maintenance and begins fetching the channel program. It does not receive payload data or a complete source/destination configuration from the manager. The first channel instructions establish SAR/DAR/CCR and any loop context they need.
+
+There is no per-channel ready/acceptance response in this GO wiring. The manager completes its instruction even if a valid target was already active and therefore ignores the launch as specified. This explains an important software distinction: **debug instruction completion is not confirmation that a running channel was restarted.** A driver must establish the target's lifecycle state before issuing GO.
+
+### 23.4 Three completion milestones that software must separate
+
+| Milestone | What has finished | What can still be pending |
+|---|---|---|
+| APB DBGCMD access completes | The register command was accepted through the APB path | Manager validation/execution, channel startup and all transfer work. |
+| DBGSTATUS returns idle | The manager-side debug command has been serviced | Channel fetch, descriptors, bus traffic, event generation and normal END cleanup. |
+| Transfer's notification/termination condition is met | The condition expressed by the channel program | Other channels, CPU cache maintenance, or channel END if notification preceded it. |
+
+For example, DMAGO can complete before the target's first code refill returns. A channel's DMASEV can occur before its DMAEND reaches Stopped. Even `WMB; SEV; END` separates write completion, notification and thread termination. Software that wants to reuse the same channel must check Stopped rather than treating the notification alone as a reusable-channel acknowledgement.
+
+The manager does not automatically wait after every GO. If its program needs a dependency, it must express one, normally through a correctly routed event. If it only launches independent work, it can start the next channel immediately after progressing through its own instruction flow.
+
+### 23.5 Coordinating two channels through manager events
+
+Suppose channel 0 produces a staging buffer and channel 1 consumes it. This example uses a secure manager and secure channel launches. Assume both channels are initially Stopped, the programs and buffers have been published, and E1/E2 are clean, owned event-mode resources. Set INTEN[1]=0 and INTEN[2]=0; use a separate E3 with INTEN[3]=1 for the CPU notification. The programs can have this structure:
+
+```text
+Manager program                         Channel 0 program
+----------------                        -----------------
+DMAGO C0, producer_program               initialize SAR / DAR / CCR
+DMAWFE E1                               load / store producer data
+DMAGO C1, consumer_program               DMAWMB
+DMAWFE E2                               DMASEV E1
+DMASEV E3                               DMAEND
+DMAEND
+
+                                        Channel 1 program
+                                        -----------------
+                                        initialize SAR / DAR / CCR
+                                        read producer buffer / write result
+                                        DMAWMB
+                                        DMASEV E2
+                                        DMAEND
+```
+
+1. The manager launches channel 0 and waits at E1. Channel 0 continues on its own; the manager is not executing each of its LD/ST instructions.
+2. Channel 0 completes the writes relevant to the dependency before setting E1. Its WMB is what makes E1 a meaningful DMA-side producer-completion signal.
+3. The event unit satisfies the manager's wait. A sticky E1 can already have been set before the manager reached WFE; the program does not require a single-cycle pulse coincidence.
+4. The manager launches the previously stopped channel 1. Channel 0 can still be finishing its own END sequence; they are different contexts.
+5. Channel 1 completes its output writes and signals E2. The manager's second wait releases and it produces E3 for software.
+
+This is explanatory microcode, not a complete tested binary for a specific buffer layout. It expresses two ordered stages. To overlap stages on different buffers, use explicit ownership and enough independent buffer/event context; simply launching both programs before the dependency is satisfied does not make the consumer safe.
+
+In this implementation an interrupt-routed E1 would not satisfy the manager's WFE. Conversely, using the same event number for unrelated transactions can merge notifications because its state is a sticky bit, not a queue of completion records. Event allocation is part of the program protocol.
+
+### 23.6 Debug commands while the manager is already active
+
+Real-time debug must preserve the manager's memory-program context. The current RTL records whether it must return to a fetch or an event wait after servicing a debug instruction:
+
+| Manager situation | Current RTL handling | Effect on the memory-program PC |
+|---|---|---|
+| Stopped | Capture a manager-directed debug instruction and execute it | Successful nonterminating debug work returns to Stopped; it does not advance a memory program. |
+| FETCH, including a stalled refill | Debug command can preempt the fetch boundary | Successful GO/SEV resumes fetching the same program PC. Stale delivery is suppressed/drained. |
+| Executing an ordinary instruction / Updating PC | Command remains pending until a service point | The ordinary instruction is not replaced halfway through its effects. |
+| WFE | A debug command can be serviced while preserving the wait context | Successful nonterminating debug work returns to the wait rather than skipping the WFE. |
+| Faulting | Debug DMAKILL is the recovery operation | Other commands do not recover the manager or resume its program. |
+
+Debug instructions do not add their byte length to DPC. Otherwise, injecting a six-byte DMAGO could incorrectly skip bytes in the manager's boot program. M_UPDATING_PC is used for the memory-resident manager program, not as a retirement step for injected debug instructions.
+
+The current M_WFE logic gives an already satisfied `wfe_hit` priority over taking the pending debug request on that edge. The command remains pending through the register/manager handshake and can be serviced at a later boundary. This is a scheduling detail, not a rule that a debug command must execute on the same edge it was accepted on APB.
+
+A preempted fetch can still have externally committed AXI obligations. Dropping its instruction request prevents late bytes from being executed as stale program context; it does not permit a malformed truncated AXI transaction. The fetch/cache cancellation protocol handles that distinction.
+
+### 23.7 Manager state is not the channel state machine
+
+The manager's architectural state set is smaller: Stopped, Executing, Cache miss, Updating PC, Waiting for event and Faulting. It does not enter channel Completing to wait for the channels it previously launched. It also does not use channel WFP, a channel MFIFO stream or channel write barriers.
+
+The channel's local-buffer optimization must not be assumed to apply to the manager. In the present RTL, the manager overlaps fetch during M_UPDATING_PC but returns to M_FETCH; the new direct UPC-to-EXEC local-hit selection belongs to `dma_channel`. Both report the Arm-defined status codes appropriate to their own phases.
+
+Likewise, the same numeric internal enum is not interchangeable between the two RTL modules. Software reads DSR[3:0] for the manager and CSRn[3:0] for a channel; verification waveforms can additionally display each module's internal phase.
+
+### 23.8 Security and fault ownership across the launch boundary
+
+| Condition | Which context diagnoses it? | Why |
+|---|---|---|
+| GO names an unimplemented channel | Manager, operand_invalid | Validation fails before a valid launch can be emitted. |
+| NS manager attempts to launch a secure channel | Manager, dmago_err | The launch instruction violates manager permissions. |
+| Valid GO targets an already-running channel | No restart; target ignores GO | It is not a replacement-program mechanism. |
+| NS channel later executes forbidden MOV CCR | Channel, ch_rdwr_err | The fault belongs to the channel program, not the earlier valid GO. |
+| Channel data write receives an error | Channel, data_write_err | The datapath associates the response with that channel. |
+| Manager boot instruction fetch fails | Manager, instr_fetch_err | The fetch belongs to the manager's program. |
+
+A secure manager may launch secure or NS channels. An NS manager may launch only NS channels. CNS comes from the accepted launch, not merely from which APB port software used. The APB visibility gate and instruction permission checks are separate stages of authorization.
+
+Manager fault does not implicitly roll back or globally kill previously launched channels. A channel fault does not cause the manager to start executing a general-purpose exception handler. The external agent diagnoses FSRD/FSRC/FTRD/FTRn and applies an appropriate recovery policy. If the manager is waiting for an event from a channel that faulted before sending it, ordinary completion will not magically release that wait.
+
+### 23.9 END and KILL are local lifecycle operations
+
+DMAEND in a manager program stops that manager. Channels already launched can continue. DMAEND in a channel allows that channel's data work to complete before it stops. These meanings are related but have different cleanup conditions.
+
+A manager-directed debug DMAKILL stops/recovers the manager; it is not an implicit broadcast kill to all channels. To cancel channel n, use the channel-directed debug selector and channel number. That channel must retire its noncancelable bus work before reaching Stopped. Other channels remain independent unless software or a shared-resource fault policy acts on them.
+
+For a complete controlled shutdown, the driver must separately manage new submissions, manager activity, each affected channel, outstanding transactions and shared-core quiescence. Seeing DSR=Stopped is not proof that no AXI data traffic remains.
+
+### 23.10 How to inspect the relationship in RTL and traces
+
+Start at [dma_regs](../rtl/core/dma_regs.sv) for debug staging, pending/busy state and dispatch. Follow `mgr_dbg_valid`, the latched instruction and `mgr_dbg_done` into [dma_manager](../rtl/core/dma_manager.sv). Then follow `go_valid[n]`, `go_pc` and `go_ns` through [dma330_core](../rtl/core/dma330_core.sv) to the selected [dma_channel](../rtl/core/dma_channel.sv).
+
+For event coordination, follow manager/channel SEV and WFE ports into [dma_event_irq](../rtl/core/dma_event_irq.sv), then the appropriate `wfe_hit` back to its waiting context. Payload requests instead leave the channel through LD/ST descriptor interfaces into the datapath; they do not return through the manager.
+
+A useful observation order is: APB command acceptance → manager execution → GO selection → target state/PC/security capture → channel instruction delivery → descriptor acceptance → bus retirement → event generation → receiver wakeup. This separates control completion from data completion and explains why apparently distant transitions belong to one causal operation.
+
+## 24. DMAC operation as a pipeline of commitments
+
+### 24.1 Submission is not execution, and execution is not visibility
+
+A useful general DMAC model is a pipeline whose stages acquire increasingly concrete obligations:
+
+| Stage | What has become committed | What is not established yet |
+|---|---|---|
+| Software submission | A valid job/program has been made available and requested | The controller has not necessarily fetched it. |
+| Instruction execution | The current operation has passed its operand/permission checks | A descriptor or bus request may still wait for admission. |
+| Descriptor acceptance | Queue/buffer resources have been assigned to the operation | External AR/AW/W acceptance may still be pending. |
+| Bus acceptance | The relevant external protocol obligation exists | Responses and full payload completion can still be outstanding. |
+| Transaction retirement | The corresponding transfer response has been consumed | The whole job, notification or software visibility protocol may still be incomplete. |
+| Completion handoff | The chosen program-level completion condition is signaled | CPU-side mapping/cache/ownership actions remain platform dependent. |
+
+The stages can overlap for different instructions and channels. A source address can already point past a queued load while earlier R beats are returning. A channel can have entered a wait state while its write engine continues draining accepted work. These are normal consequences of decoupling, not contradictory state reports.
+
+Cancellation must respect the stage reached. Work still in a cancelable queue can be discarded. An externally committed transaction cannot simply disappear because its software job was canceled. That distinction is why killing a thread can require additional bus activity instead of immediately making every VALID low.
+
+### 24.2 Read, write and cross-channel ordering
+
+DMARMB waits for the channel's earlier read work and supports a dependency such as completing a read before a later write to the same location. DMAWMB waits for the channel's earlier writes and supports a dependency such as completing a write before a later read. See TRM §§4.3.14 and 4.3.21. Neither is a global barrier that stalls every other DMA channel or a CPU instruction that operates on a processor cache.
+
+For a cross-channel dependency, an ordering operation and a synchronization operation serve different purposes:
+
+```text
+Producer channel:  write result -> WMB -> SEV E
+Consumer context:                      WFE E -> read result
+```
+
+The producer's barrier supplies the DMA-side data ordering. The event conveys that the consumer may proceed. Removing WMB can let the producer announce an operation whose writes are still outstanding. Removing the event leaves no explicit cross-thread dependency. Correct memory attributes and system visibility rules remain part of the integration.
+
+AXI IDs associate responses and ordering domains; they do not impose one universal time order across unrelated channels. This AXI4 implementation sends a complete W burst before starting the next W burst, while address issue and responses can be decoupled. Do not infer payload readiness from an AW ID currently visible on the bus: the active W context can belong to an address already queued earlier.
+
+### 24.3 Peripheral flow control and memory-system flow control are separate
+
+An external FIFO has finite storage; the AXI interconnect has finite accepting capacity; the DMAC has finite internal queues and MFIFO space. These are three different sources of back-pressure.
+
+DMAWFP handles peripheral permission to perform work. ARREADY/AWREADY/WREADY and R/B delivery regulate the memory-mapped transport. Internal admission controls protect the DMAC's own storage. A granted request does not make the interconnect ready, and an always-ready AXI slave does not authorize access to a peripheral that has not requested data.
+
+For a receive path, delaying CPU processing can fill destination buffers even when the DMA and peripheral protocol are functioning correctly. A complete system needs a buffer-allocation and overrun policy; DMAC register correctness alone cannot provide it. Similarly, continuous transmit needs both a data-production policy and appropriate peripheral pacing to avoid underflow.
+
+### 24.4 Buffer ownership, repeated work and scatter-gather
+
+A common software ownership cycle is:
+
+```text
+FREE -> prepared by software -> DMA-owned -> DMA completion observed
+     -> CPU-owned/consumed -> released for reuse -> FREE
+```
+
+Define who may modify payload, program bytes and completion flags at each stage. The necessary cache/mapping operations depend on whether the system is coherent and how memory is shared. A driver should not rewrite a DMA-owned program or consume a partially written destination merely because a progress register advanced.
+
+A ring or double-buffer design adds a separate generation/ownership protocol. An event bit alone does not count how many buffers completed; repeated sets can merge while the flag remains asserted. Software counters, distinct resources or another explicit protocol must identify which buffer and generation is ready.
+
+DMA-330 can express repeated address sequences through microcode and software orchestration. That does not imply a native engine that autonomously reads arbitrary linked-list descriptors and loads pointers from them into SAR/DAR. A scatter-gather submission may need a driver to translate segments into microcode, multiple launches or a controller-specific wrapper. Evaluate the actual programming model rather than importing the descriptor semantics of another DMA IP.
+
+## 25. Arm resource sharing and forward progress
+
+### 25.1 Byte count and MFIFO entry count are different budgets
+
+TRM §2.11.4 and Appendix B analyze MFIFO use in **entries**, not just payload bytes. The Arm examples arrange incoming data according to destination formatting. Source/destination alignment and FIXED accesses can therefore change the entry requirement for the same useful byte count.
+
+This workspace presents a densely packed per-channel byte stream in its internal MFIFO. Its 128-line pool is a concrete storage implementation, but its allocation can differ from the Arm examples. Use the Arm restrictions to write legal programs, then use this RTL's reservation/occupancy rules to explain its measured utilization. Dividing bytes by eight is not a universal proof that a program set fits the Arm macro or every implementation.
+
+Distinguish three quantities:
+
+| Quantity | Question answered |
+|---|---|
+| Useful payload held | How many meaningful data bytes are available to future stores? |
+| Owned/occupied entries | How much physical buffer storage currently belongs to the channel? |
+| Reserved capacity | How much space is already promised to accepted reads whose data may not have returned? |
+
+Counting only returned payload can admit more future R data than the buffer can hold. Counting only descriptor bytes can miss partially used entry effects. Both program-level resource analysis and correct hardware admission are needed.
+
+### 25.2 Static and dynamic requirements under load-lock
+
+For Arm's analysis, let S_i be channel i's static requirement and P_i its peak entry use. The static term captures the maximum retained requirement at the specified wait/load-lock acquisition boundaries. The dynamic term is `D_i = P_i - S_i`: additional peak demand that can grow while the load-lock serializes loading phases.
+
+The required capacity for a concurrently started program set is:
+
+```text
+Required MFIFO entries = sum(S_i) + max(D_i)
+Required MFIFO entries <= configured MFIFO depth
+```
+
+For example, assume analysis of two programs has already established these hypothetical profiles:
+
+| Program | Static S | Dynamic D | Peak P |
+|---|---:|---:|---:|
+| A | 1 | 4 | 5 |
+| B | 2 | 3 | 5 |
+
+The combined requirement is `1 + 2 + max(4,3) = 7` entries. An eight-entry resource satisfies that model with one entry of headroom. Adding the two peaks would give ten and ignore the serialization supplied by load-lock; taking only the largest peak would give five and ignore simultaneously retained static data.
+
+These numbers are a calculation example, not measured requirements for the current channel programs. S and P must first be derived from the actual loop, wait, alignment and transfer-format behavior. A hypothetical table does not replace that derivation or establish the workspace's exact physical allocation.
+
+### 25.3 What load-lock guarantees
+
+A channel can claim free load-lock on a load. An owning channel can continue its load sequence; another channel attempting a load waits until ownership becomes available. Stores, barriers, waits, normal termination and abort release ownership as defined for the executed operation. A false conditional store is a NOP and must not accidentally release it.
+
+Load-lock is an internal progress/resource mechanism. It is not AXI exclusive access, a CPU mutex visible in memory, or a guarantee that a channel can accumulate unlimited data. It also does not protect an application buffer from another bus master writing it. Those are different synchronization domains.
+
+Program structure matters: retaining payload before waiting for another producer can increase static use, while bounded load/store phases can reduce simultaneous retained demand. Optimizing only burst length without considering these boundaries can increase the total MFIFO requirement.
+
+### 25.4 Resource lock-up versus an event dependency deadlock
+
+Arm §2.8.3 describes resource lock-up detection when queued work is drained and all running channels are blocked from loading because of insufficient MFIFO space or load-lock ownership. In this RTL, the detector also checks relevant busy/release conditions before declaring that contributing channels cannot make progress. WD[0] selects whether to abort/report or only report.
+
+This is different from two programs that each wait for an event the other will never send. That software dependency can deadlock even when the MFIFO is empty. A legitimate WFE/WFP in a running context also prevents interpreting the whole program set as the specific all-load-blocked condition. The programmable timeout extension has its own activity policy; it must not be assumed to solve every application-level wait cycle.
+
+When diagnosing lack of progress, first distinguish: waiting for a real external request, waiting for bus retirement, waiting for temporary resource availability, impossible MFIFO sizing, and cyclic program dependencies. Increasing a watchdog timeout cannot correct an impossible resource budget or a missing event producer.
+
+## 26. Applying the Arm specification to a complete system
+
+### 26.1 Behavioral requirements, implementation mechanisms and timing
+
+The Arm TRM defines instruction/register semantics and describes the Arm implementation's behavior. The same software-visible state can be realized by different internal phases. This workspace's C_RECONFIG and direct UPC-to-EXEC path are implementation mechanisms; they do not create additional architectural CSR codes.
+
+Some Arm descriptions are also specific scheduling characteristics. For example, §§2.10.1–2.10.2 describe round-robin/equal-priority channel service and manager service before the next channel. Do not turn that description into an unverified latency or priority claim for every resource in this RTL. Its shared-cache arbiter rotates across thread requests, its cache can serve hits under a refill, and its read/write/admission resources have separate eligibility and arbitration decisions. Exact cycle/priority equivalence needs analysis of those actual arbiters.
+
+The safe documentation pattern is to state the architectural requirement first, identify the implementing mechanism second, and use a trace or a targeted check for its observed timing. An expected register value alone does not establish that every arbitration or buffer detail matches the Arm macro.
+
+### 26.2 Explicit system responsibilities
+
+| Layer | Responsibilities not supplied by a bare DMA microprogram |
+|---|---|
+| Driver/application | Channel/event ownership, segment translation, buffer lifecycle and recovery policy. |
+| CPU/memory subsystem | Required mapping, permissions, cache visibility and ordering for shared data/program memory. |
+| Interconnect/slaves | Legal acceptance/response behavior, address decode, security enforcement and performance under contention. |
+| Peripheral | Correct request/last/flush behavior and a defined FIFO access contract. |
+| Reset/clock/power integration | Coordinated reset, valid CDC operation and quiescence before clock/power actions. |
+
+For a real-time stream, characterize worst-case request service, buffer capacity and competing traffic. Round-robin service by itself is not a deadline guarantee, especially when instruction refills or an external slave can stall. For correctness, characterize every ownership and completion boundary rather than treating a configured DMA channel as an isolated copy function.
+
+### 26.3 Review questions that connect the whole design
+
+Before declaring an operation understood, answer these questions: Who starts it? Which context owns the instruction? What makes the target channel eligible to launch? When are descriptors accepted? Which bytes and resources are promised? What external response retires the operation? What orders the notification? Who consumes the event? Which context owns a possible fault? What must software observe before reusing the channel or buffer?
+
+The manager–channel launch/event flow in section 23, the commitment stages in section 24 and the MFIFO budget in section 25 provide complementary answers. Together they explain both normal execution and why a controller can be protocol-correct yet still wait indefinitely because its program or system contract is incomplete.
