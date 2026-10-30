@@ -2,7 +2,7 @@
 
 **Audience:** RTL and verification engineers, firmware developers, and SoC integrators.
 
-**Reading time:** sections 1–16 are the 20–25 minute overview. Sections 17–26 are an extended technical reference for focused study and lookup.
+**Reading route:** the core discussion in sections 1–16 is the 20–25 minute overview. The added worked-operation/state subsections in sections 9–11, 13 and 14, together with sections 17–27, are optional deeper reference material; reading the complete document takes substantially longer.
 
 **Architectural reference:** Arm DMA Controller DMA-330 r1p2 Technical Reference Manual, DDI 0424D.
 
@@ -35,9 +35,13 @@ For detailed work, continue with [microcode and binary encodings](#17-microcode-
 
 For the relationships between blocks, read [manager–channel coordination](#23-how-the-manager-and-channel-threads-work-together), [DMAC transaction and ownership stages](#24-dmac-operation-as-a-pipeline-of-commitments), [Arm MFIFO resource requirements](#25-arm-resource-sharing-and-forward-progress), and [the specification-to-integration contract](#26-applying-the-arm-specification-to-a-complete-system).
 
+The [function and operation coverage map](#27-function-and-operation-coverage-after-review) connects the principal capabilities to their explanations and recorded examples. It also identifies behavior that this document does not claim as an established feature.
+
+For the detailed execution explanation, start with [channel entry/hold/exit conditions](#103-every-channel-phase-entry-retained-work-and-exit), [the four main state flows](#104-four-state-flows-to-recognize) and [manager phases](#105-manager-phases-and-their-separate-flow). Then read [instruction execution contracts](#177-how-to-read-an-instructions-execution-contract) through section 17.12 alongside the encoding catalog.
+
 ### 1.1 How to use the reference chapters
 
-Sections 1–16 form the continuous introduction. The later chapters are intended for deeper lookup: open them when writing microcode, decoding a register value, diagnosing a transfer or reviewing a waveform. Reading every encoding table is not a prerequisite for understanding the overview.
+Sections 1–16 form the continuous introduction. For the shorter reading route, return to the detailed worked-operation subsections when needed. The later chapters are intended for deeper lookup: open them when writing microcode, decoding a register value, diagnosing a transfer or reviewing a waveform. Reading every encoding table is not a prerequisite for understanding the overview.
 
 The numerical examples are supported by explicit arithmetic rather than unexplained constants. CCR construction, instruction lengths and offsets, little-endian operands and debug-register packing have been cross-checked during authoring. [Section 20.6](#206-how-the-worked-examples-are-calculated-and-cross-checked) explains how to repeat those checks. Figure links resolve to the corresponding saved SVG/JSON pair, and the captions identify the source run and selected interval.
 
@@ -298,6 +302,72 @@ The instruction thread and bus engine are concurrent. These milestones are a cau
 
 If E0 is interrupt-routed, software acknowledges it and establishes the CPU-side visibility/ownership needed before consuming the destination. A DMA-side barrier does not independently invalidate CPU caches or establish an arbitrary SoC's coherency policy.
 
+### 9.1 Zero fill: a write operation without source data
+
+DMASTZ is a distinct main function, not a normal DMAST after loading a zero buffer. For an aligned 32-byte fill, configure the destination for four eight-byte INCR beats and execute:
+
+```text
+DMAMOV CCR, ZERO_DESTINATION_4_BY_8_BYTES
+DMAMOV DAR, destination
+DMASTZ
+DMAWMB
+DMASEV E0
+DMAEND
+```
+
+The symbolic CCR must have legal attributes for the selected thread; its destination fields define the operation. There is no required data DMALD, source-buffer allocation or source payload to consume. Instruction-fetch reads can still appear on AXI, so “zero fill” does not mean AR must remain inactive throughout the program.
+
+AW describes the destination, W supplies zero on enabled byte lanes, and B retires the write transaction. WSTRB still determines which bytes change. A narrow zero store must not overwrite neighboring disabled lanes simply because zero appears in the entire printed WDATA word. The normal WMB/notification/END distinctions continue to apply. See [zero-fill operation](waveform/operations/07_zero.md) and TRM §4.3.18.
+
+### 9.2 Two-dimensional copy: row length is different from stride
+
+Consider three rows of 24 useful bytes each. Source rows begin 40 bytes apart and destination rows begin 32 bytes apart. With eight-byte beats, each row uses three beats. After an ordinary row transfer, the DMA has already advanced SAR/DAR by 24; software adds only the remaining gaps:
+
+```text
+source_gap = source_stride - row_bytes = 40 - 24 = 16
+dest_gap   = dest_stride   - row_bytes = 32 - 24 = 8
+
+DMAMOV CCR, INCREMENTING_3_BY_8_BYTE_READS_AND_WRITES
+DMAMOV SAR, source_base
+DMAMOV DAR, destination_base
+DMALP LC0, 3
+row:
+    DMALD
+    DMAST
+    DMAADDH SAR, 16
+    DMAADDH DAR, 8
+DMALPEND LC0, row
+DMAWMB
+DMASEV E0
+DMAEND
+```
+
+This is a worked program layout, not a newly recorded testcase. It moves 72 payload bytes, not 120 source bytes or 96 destination bytes. Source row starts are S, S+40 and S+80; destination starts are D, D+32 and D+64. Adding the complete stride after LD/ST would double-count the 24-byte advancement.
+
+The example also adds a gap after the last row. Final SAR is S+120 and DAR is D+96, although the last payload ends earlier. Those final pointers are a consequence of this program, not an exact “last byte committed” report. If final pointers must identify the end of the last payload, structure the final-iteration adjustment accordingly.
+
+A DMALP iteration operand of 3 encodes counter value 2. The illustrated loop body occupies eight instruction bytes, so its finite loop-end backward distance is eight. Positive row gaps preserve eight-byte alignment here. Negative strides require the DMAADNH representation and a checked address range; automatic decrement mode is not a CCR feature. See [loop/2D operation](waveform/operations/08_loops.md), §17.4 and TRM §§4.3.1–4.3.2.
+
+### 9.3 Exact-length unaligned copy: balance the byte stream
+
+The recorded unaligned example copies 19 bytes from 0x10000003 to 0x20000005 on a 64-bit bus. The source and destination cannot use an identical beat-count interpretation:
+
+| Piece | Shape | Useful bytes |
+|---|---|---:|
+| First source load | Two eight-byte-sized INCR beats starting at source lane 3 | 5+8=13. |
+| Source tail load | Six one-byte INCR beats starting at 0x10000010 | 6. |
+| Destination store | Three eight-byte-sized INCR beats starting at destination lane 5 | 3+8+8=19. |
+
+Initial destination shape must be established before accumulating data that it would later discard under a destination discontinuity. The source-size change for the tail applies its read-ordering rule while preserving the existing destination stream. The first destination strobe is 0xe0; the following two full beats use 0xff. Bytes outside those asserted lanes must remain unchanged.
+
+Useful source data spans 0x10000003 through 0x10000015 inclusive. Destination data spans 0x20000005 through 0x20000017. The final incremented addresses are 0x10000016 and 0x20000018. This accounting explains why rounding 19 up to 24 and issuing three full aligned writes would be incorrect. See [the recorded 19-byte operation](waveform/operations/04_unaligned.md) and §19.4.
+
+### 9.4 Packing, overlap and what a copy operation does not imply
+
+Packing can turn sixteen byte-sized source beats into two eight-byte destination beats; unpacking can do the reverse. Total useful bytes and ordering must match even when beat counts differ. The MFIFO is the bridge between those shapes, not an automatic source of missing bytes. A transiently empty buffer while an admitted read is pending differs from a store whose preceding loads can never supply the requested data.
+
+A generic memory-copy program is not automatically `memmove`. With overlapping ranges, an early destination write may overwrite bytes a later load has not captured. If overlap is required, prove the chosen direction, chunking, address sequence and resource budget, or use a safe staging strategy. DMA-330 supplies address arithmetic and programmable sequencing; it does not infer application-level overlap intent from SAR/DAR alone.
+
 ## 10. Architectural states and optimized instruction execution
 
 ### 10.1 What software sees
@@ -342,6 +412,70 @@ This bypass changes internal latency, not the software state set. It does not re
 
 Waiting for an event, peripheral or barrier holds the instruction's context. Release enters UPC, then selects the appropriate instruction-delivery path. A channel in a wait state can still have previously submitted bus work retiring in parallel.
 
+### 10.3 Every channel phase: entry, retained work and exit
+
+The following table describes the current RTL's normal next-state conditions. Fault/debug-kill overrides can supersede them. Internal numeric values are shown to decode recorded traces; they are not additional software-visible state codes.
+
+| Internal phase/value | How it is entered | What happens or remains held | Normal exit |
+|---|---|---|---|
+| C_STOPPED / 0 | Reset or completed END/KILL cleanup | No new instruction fetch; residual channel data is flushed. Working register values can remain visible. | Accepted GO loads PC/NS and selects C_FETCH. |
+| C_FETCH / 1 | Initial launch or UPC without fast delivery | Obtain the complete instruction. PC is held; CSR is Executing or Cache miss according to real refill state. | insn_valid selects EXEC; fetch_err selects FAULT_COMPLETING. Otherwise remain here. |
+| C_EXEC / 2 | Instruction delivery | Validate and apply the decoded instruction. A load/store can remain here with its request pending. | Instruction-specific: UPC, wait/barrier, RECONFIG, completion, kill or fault. |
+| C_WFE / 3 | Valid DMAWFE | Hold the wait's PC and selected event; previously submitted data can continue. | wfe_hit selects UPC. |
+| C_WFP / 4 | Valid DMAWFP | Hold peripheral/mode context; wait for peripheral control's grant. | wfp_gnt captures request flags and selects UPC. |
+| C_BARRIER / 5 | RMB, WMB or FLUSHP | Hold PC and the selected ordering/flush mode. | Direction idle for RMB/WMB, or accepted flush request after dp_idle for FLUSHP, selects UPC. |
+| C_COMPLETING / 6 | DMAEND | Stop issuing instructions; allow queued/in-flight channel data work to finish normally. | dp_idle selects STOPPED. |
+| C_KILLING / 7 | Program DMAKILL or authorized debug kill | Cancel queued work and discard eligible payload while retaining committed bus obligations. | dp_idle clears FTR and selects STOPPED. |
+| C_FAULT_COMPLETING / 8 | Accepted fetch/execute/data/debug/watchdog abort | Record diagnostics, stop normal execution and perform fault cleanup. | dp_idle selects FAULTING. |
+| C_FAULTING / 9 | Fault cleanup completes | Retain diagnosis and remain halted. GO does not recover the context. | Debug kill selects KILLING. |
+| C_UPDATING_PC / 10 | Ordinary instruction completion or wait release | Calculate target and commit PC at the edge; no second instruction effect. | Fast delivery selects EXEC, otherwise FETCH. |
+| C_RECONFIG / 11 | A discontinuous MOV | Keep the old destination register/CCR value and MOV PC while required data work drains. | Commit MOV when its condition holds, then select UPC. |
+
+Here `dp_idle = !rd_busy && !wr_busy` for that channel. It is not an explicit test for zero MFIFO payload, no shared-cache activity or no activity on any other channel. For example, Completing can reach Stopped with residual bytes that the subsequent cleanup path discards; it is not an instruction to write every remaining buffered byte.
+
+A held phase is not automatically an error. FETCH can wait on code, EXEC on descriptor admission, WFP on the peripheral, BAR on retirement and KILLING on protocol obligations. Inspect the corresponding exit condition before describing the interval as a hang.
+
+### 10.4 Four state flows to recognize
+
+```text
+Ordinary buffered instruction:
+  EXEC --effect/acceptance--> UPC --fast instruction available--> EXEC
+
+Instruction requiring front-end work:
+  EXEC --> UPC --> FETCH --instruction delivered--> EXEC
+                  CSR can be Executing, Cache miss, then Executing
+
+An ordered completion sequence:
+  EXEC(WMB) --> BARRIER --writes retired--> UPC --> EXEC(SEV)
+       --> UPC --> EXEC(END) --> COMPLETING --dp_idle--> STOPPED
+
+Abort and external recovery:
+  eligible active phase --> FAULT_COMPLETING --dp_idle--> FAULTING
+       --debug KILL--> KILLING --dp_idle--> STOPPED --new GO--> FETCH
+```
+
+These are conceptual sequences; UPC can use FETCH between the listed instructions if delivery is not ready. A wait that is already satisfied can still have a visible wait/transition phase. Do not collapse the sequence into “one instruction equals one clock” or assign a fixed duration to Completing.
+
+Descriptor acceptance is the important branch inside EXEC: a true load condition with ld_ready=0 remains EXEC, while ld_ready=1 admits the descriptor and permits address/context progress. The matching distinction applies to stores. SAR/DAR advancement and PC-update scheduling therefore identify issued work, not completed bytes. A false conditional transfer goes through UPC without the corresponding descriptor.
+
+For precise execute-time faults, the invalid instruction does not perform its normal effect. A late data fault has a different relationship to the current PC. Debug kill has final next-state priority for an eligible nonstopped channel, but a next-state override is not an undo mechanism for earlier external handshakes.
+
+### 10.5 Manager phases and their separate flow
+
+| Manager phase | Software state | Purpose and normal progression |
+|---|---|---|
+| M_BOOT | Stopped during initialization | Capture boot context once, then select FETCH or STOPPED. |
+| M_STOPPED | Stopped | Await an accepted manager-directed debug instruction. |
+| M_FETCH | Executing or Cache miss | Fetch the manager program; an available debug request can preempt this service point. |
+| M_EXEC | Executing | Execute validated GO/SEV/NOP or a manager lifecycle/wait instruction. |
+| M_UPDATING_PC | Updating PC | Advance the memory-program PC, then return to FETCH. |
+| M_WFE | Waiting for event | Hold the manager's event dependency; release to UPC or service permitted debug work with return context. |
+| M_FAULTING | Faulting | Retain FTRD and await debug kill for recovery. |
+
+A memory-program GO follows FETCH → EXEC → UPC → FETCH. An injected debug GO enters manager execution using the latched debug bytes and then returns to the saved Stopped/FETCH/WFE context without adding six to DPC. Channel execution starts independently at the accepted GO edge. The channel local-buffer bypass is not automatically a manager bypass; the present manager leaves its fetch unit's fast-hit output unused.
+
+This is why a diagram that uses one generic “thread FSM” for both contexts would hide important behavior. Section 23 follows the complete manager-to-channel launch and synchronization flow.
+
 ## 11. Peripheral requests, events and completion ordering
 
 ### 11.1 Peripheral pacing
@@ -361,6 +495,41 @@ DMASEV sets a sticky flag. With INTEN clear, that number is used as an event and
 A sticky event can already be present before the wait starts. Conversely, an event is not a general counting semaphore for an unlimited number of queued notifications. Software and programs must assign event numbers and ownership deliberately.
 
 DMASEV alone does not wait for earlier writes. Use a write barrier before a notification that promises DMA-side write completion. DMAEND, DMASEV and CPU-visible buffer readiness are three separate parts of the completion protocol.
+
+### 11.3 Peripheral protocol fields and a complete flush exchange
+
+The two-bit type has direction-dependent meaning. Interpret it together with the accepted handshake, not as a continuously meaningful status bus:
+
+| Type value | DR: peripheral to DMAC | DA: DMAC to peripheral |
+|---|---|---|
+| 00 | Single request | Single-transfer acknowledgement. |
+| 01 | Burst request | Burst-transfer acknowledgement. |
+| 10 | Flush acknowledgement | Flush request. |
+| 11 | Reserved | Reserved. |
+
+DRLAST accompanies the accepted DR request and marks the final request in a peripheral-controlled series. It is not RLAST or WLAST and does not itself mean that the last AXI payload has retired. Request context must remain stable while DRVALID is high and DRREADY is low; DA type must likewise remain stable under DA back-pressure. See TRM §2.6.2 and Table 2-2.
+
+A peripheral flush has several stages:
+
+1. The channel reaches DMAFLUSHP and orders its earlier reads/writes, including relevant internal acknowledgement retirement.
+2. With the drain condition satisfied, it presents the flush request to peripheral control. Queue acceptance can let the instruction progress before the external exchange finishes.
+3. Peripheral control clears old pending request context, queues DA type 10 and enters its flushing state.
+4. The peripheral accepts that DA message. It supplies a DR type 10 acknowledgement according to its protocol.
+5. Peripheral control accepts the flush acknowledgement, leaves flushing and resumes normal request collection. Ordinary request types encountered while flushing are discarded by this implementation.
+
+Thus channel BAR release, DA flush acceptance and DR flush acknowledgement are three observations, not one edge. Software must not assume that an IRQ or completion of DMAFLUSHP's internal queue handshake means the external peripheral has already re-advertised its next valid request.
+
+The current wrapper has one pending-request latch per interface; a pending normal request can lower DRREADY. Arm's macro allows configuration of request-acceptance capability, so the number of interfaces and requests buffered per interface are separate dimensions. A deeper queue cannot be inferred merely from CR0 reporting several peripheral ports.
+
+Peripheral numbers are selected by WFP/LDP/STP/FLUSHP operands rather than permanently wired to a single channel number. If several channels wait on the same peripheral, software must define ownership. This RTL selects the first matching waiting channel in its channel-index loop; it does not promise round-robin fairness for that particular contest. Reusing one peripheral across channels without an ownership protocol can associate a request with an unintended transfer program.
+
+### 11.4 One event, multiple waiters and repeated notifications
+
+TRM §2.7.1 distinguishes two situations. If several contexts are already waiting on the same event, one SEV can release those waiting contexts together. If an event was set earlier, a later WFE can consume the pending flag; another context arriving after consumption must await a new event. A sticky flag is not a permanent broadcast history.
+
+For example, C0 and C1 already waiting on E5 can both be released by one SEV E5. In contrast, if SEV E5 occurs before either wait, C0 may arrive first and consume it; C1's later WFE is not guaranteed to find it still pending. Do not use the latter ordering as an implicit two-consumer barrier.
+
+For interrupt-routed resources, IRQ is level-sensitive while the flag remains set. Writing INTCLR acknowledges that flag; it does not count completed buffers, advance a channel program or resume WFE. Multiple SEVs before acknowledgement can merge into one asserted level. A ring-buffer design therefore needs a separate generation/count/ownership protocol.
 
 ## 12. Alignment, boundaries and changing formats
 
@@ -397,6 +566,16 @@ A practical recovery sequence is to capture status/PC/fault/address context, req
 
 The programmable watchdog is a workspace extension. Its timeout counts ticks of 256 core clocks; it is not a raw one-clock-per-count timer. Legitimate event/peripheral waits with no pending data work are treated differently from a channel with outstanding work. A watchdog report cannot force an external slave to return a missing response, so cleanup latency is not universally bounded.
 
+### 13.1 Cancel, restart, reset and pause are different operations
+
+DMAKILL is cancellation with cleanup, not an architectural pause/save command. Stopped SAR/DAR/CPC values alone do not form a resumable checkpoint: address registers can advance on descriptor acceptance, some writes can already be committed, and pending or residual data can be discarded. Retrying from the visible CPC after an imprecise error can repeat or omit payload.
+
+For a planned pause, a program can wait at an intentionally chosen event or peripheral boundary. Its retained context and outstanding work still need analysis. A WFE does not automatically drain writes; place the required barrier before the wait if the paused state is intended to promise data completion. This is a program-level protocol rather than a generic stop/resume register.
+
+For restart after kill/fault, establish a stopped context, determine which application data may have changed, reinitialize the required program registers and publish a valid new program. A successfully drained kill does not mean a partially written destination is pristine. MMIO/FIFO side effects make blind replay particularly dangerous: a second read or write can consume or transmit another item.
+
+Reset abandons controller state under the integration's reset contract. Coordinate the connected bus, CDC bridges, peripheral protocol and software ownership; do not assume resetting only one block safely erases obligations observed by another. For low power, use quiescence acceptance before gating the core clock rather than treating a kill request or one stopped channel as whole-core idle.
+
 ## 14. Security, coherency, clocks and power
 
 **Security:** manager state, channel state, event/peripheral permissions and AXI attributes are related but distinct. A non-secure channel cannot request a secure access through CCR. This RTL checks prohibited CCR immediates at DMAMOV before committing the new value. Secure/non-secure APB views are filtered according to the relevant manager/channel permissions. Security tags and permission checks do not replace software ownership of buffers.
@@ -406,6 +585,28 @@ The programmable watchdog is a workspace extension. Its timeout counts ticks of 
 **Clock domains:** the core and external AXI interface use aclk. Optional APB and peripheral bridges cross into their respective domains. The bridges preserve request/response association; crossing latency depends on clock phase and back-pressure. Sample APB on PCLK and peripheral handshakes on the appropriate peripheral clock rather than inferring physical acceptance from a core-grid waveform.
 
 **Reset and sleep:** resets reinitialize controller context and require coordinated endpoint handling; they do not undo memory effects. Q-Channel is a workspace extension for requesting quiescence. The external clock controller must wait for sleep acceptance before gating the DUT clock and restore it for wakeup. One stopped channel does not establish whole-core quiescence: shared cache, other channels, debug and interface work also matter.
+
+### 14.1 Updating executable DMA code safely
+
+The instruction cache's invalidation protocol and the CPU's memory-publication protocol solve different problems. Cache maintenance inside the DMAC prevents stale local/shared instruction bytes from executing; CPU-side publication ensures that newly written program bytes are actually available at the DMA-visible memory address.
+
+A straightforward reuse sequence is: wait for the channel to be Stopped, modify/publish its program, then issue a new valid GO. Accepted launch invalidates that target thread's executable context in this RTL. It does not initialize SAR/DAR/CCR for the new program, so the replacement program still needs its own setup.
+
+A coordinated running-program update can instead use DMAWFE with its invalidation option at an agreed boundary. Establish the owned event/wait protocol, publish the replacement bytes that will execute after wakeup, then signal the event through an authorized producer. Invalidation is requested when the WFE executes; event arrival and code publication must not be allowed to race arbitrarily. Do not overwrite arbitrary currently executing instructions and assume the invalidation option will repair the sequence.
+
+Late cache refills must drain without delivering stale instructions into a killed/invalidated context. This behavior is cancellation/retry, not a successful instruction fetch and not necessarily an instruction-fetch bus error. Thread-tagged maintenance also matters when several contexts execute memory at the same address: updating common program storage does not make maintenance for one thread automatically invalidate all other thread tags.
+
+See the [cache cancellation example](waveform/operations/14_cache.md), TRM §4.3.19 and the actual fetch/cache lifecycle. Program visibility, thread maintenance and permission checks all need to agree before treating an update as safe.
+
+### 14.2 Sleep request, denial and wakeup
+
+For this workspace's Q-Channel extension, an external controller lowers QREQn to request quiescence. The DMAC synchronizes that request. If idle conditions are met, it asserts acceptance by lowering QACCEPTn; if active work prevents acceptance, it asserts QDENY instead. QACTIVE indicates activity/wakeup demand, not a channel completion event.
+
+The current core requires threads to be Stopped or Faulting and requires no data-path busy state, cache activity, pending peripheral acknowledgement, debug command or APB access. A thread simply waiting in WFE/WFP is not treated as an automatically sleep-accepted core in this implementation.
+
+The denied state remains denied until the requester raises QREQn. Becoming idle later while QREQn stays low does not automatically turn that denied request into an acceptance; the requester must complete the denial handshake and try again. Keep the clock running during denial.
+
+Only gate the DUT clock after acceptance. If an APB request or another wake condition arises while gated, the external clock controller must restore the clock so that synchronized request processing and the wake handshake can progress. At the top level, APB PSEL contributes to QACTIVE even before the sleeping core can service the register access. Retained controller state across a clock gate is different from reset or power removal; no retention/isolation contract for an arbitrary power domain follows from this waveform alone. See [low-power operation](waveform/operations/20_lowpower.md).
 
 ## 15. Performance and diagnostic interpretation
 
@@ -530,7 +731,7 @@ The flags `request_type` and `request_last` are channel context established by D
 | LDB/STB and LDPB/STPB | request_type=Burst | CCR burst shape | Advance as a NOP; issue no transfer. |
 | Finite LPENDS/LPENDB | Corresponding request type | Repeat according to the selected finite counter | Exit that conditional loop end. |
 
-P forms require a peripheral operand and generate an acknowledgement associated with successful transfer completion. A nonmatching P form does not generate the associated data transfer/acknowledgement. For LDP, acknowledgement is associated with completion of the read; for STP, with write-response retirement. Acceptance into peripheral control can precede the external DA handshake.
+P forms require a peripheral operand and generate an acknowledgement associated with the relevant transfer-completion path. A nonmatching P form does not generate the associated data transfer/acknowledgement. For LDP, acknowledgement is associated with completion of the read; for STP, with write-response retirement. Acceptance into peripheral control can precede the external DA handshake. In the current response paths, a peripheral acknowledgement is not a standalone certificate that the AXI response was OKAY; inspect fault/response information when diagnosing error scenarios.
 
 WFP single, burst and periph have different request-consumption rules, described in section 11.1. In the current RTL, S/B selections set request_last=0; periph selection copies the incoming burst/last context. A false conditional store preserves load-lock. See TRM §§2.6.4–2.6.5 and the relevant instruction sections.
 
@@ -588,6 +789,68 @@ For a secure channel using secure data attributes, choose CCR=0x000dc037: INCR s
 The program is 24 bytes; the payload is 32 bytes. These are independent sizes. For an NS channel using NS data accesses, set both CCR protection bit 1 positions: `0x000dc037 | 0x00800200 = 0x008dc237`. Event/peripheral permissions must also be compatible with that NS program.
 
 Writing instruction bytes into ordinary memory is insufficient if the DMA sees a stale cached copy. Publish the program with the platform's required memory/cache maintenance before launch. Updating a running program requires a defined synchronization and invalidation protocol.
+
+### 17.7 How to read an instruction's execution contract
+
+For every instruction, ask five separate questions: Is it valid for this thread? Are its operands/security legal? Is its request condition true? What resource/handshake allows progress? Which state and PC follow? The encoding catalog answers only part of that contract.
+
+The explanations below refer to the current RTL phase names. Arm defines the instruction's architectural behavior; a different implementation can realize it with different internal phases. UPC normally follows a channel instruction that continues the program, selecting direct EXEC or FETCH as described in section 10.
+
+### 17.8 Register setup and address calculation
+
+**DMAMOV SAR/DAR/CCR:** first decode the destination and validate the immediate's applicable constraints. An NS CCR immediate requesting secure protection faults before committing the new CCR. For a continuous update, commit the working register and select UPC. For a defined discontinuity, enter RECONFIG, retain the MOV PC/old register value, drain the required direction(s), apply the required discard, commit the new value and then select UPC. MOV is not a payload load from memory; the immediate is part of its six instruction bytes.
+
+**DMAADDH and DMAADNH:** calculate the selected address register's new value, then select UPC. The ADDH immediate is zero-extended; ADNH uses the negative-halfword representation described in section 17.4. Neither operation copies payload nor reports how far AXI has completed. This RTL's arithmetic path does not automatically enter the MOV-specific C_RECONFIG tests; program authors must preserve the relevant alignment, endian and ordering rules when arithmetic changes an address.
+
+**DMANOP:** perform no payload/register-transfer operation and progress to the next instruction. It still occupies encoded program space and participates in instruction delivery/PC sequencing. Its existence does not make an otherwise illegal opcode a permitted NOP.
+
+### 17.9 Data instructions: issue first, retire later
+
+**DMALD:** if unconditional, or if its S/B condition matches, form a source descriptor from SAR/CCR. Admission must supply ld_ready, including queue/MFIFO/load-lock eligibility. Until then the thread remains EXEC and must not advance SAR/PC as though the load had been admitted. On acceptance, increment SAR by useful bytes when INCR is enabled and select UPC. The read engine later issues/retire AR/R work and delivers bytes to this channel's stream.
+
+**DMALDP:** use the same conditional read mechanism with an explicit peripheral operand and acknowledgement context. The descriptor records that context so later peripheral completion is associated with the right request. Its acknowledgement is tied to read completion, not to the moment the opcode is decoded. An invalid peripheral or permission can fault before a descriptor is issued.
+
+**DMAST:** form a destination descriptor from DAR/CCR and the channel's loaded stream. A false S/B condition skips the store without consuming data or releasing load-lock. For an executing store, st_ready admits it to the write side; DAR advances on acceptance when INCR is enabled. The write engine starts a legal piece only when its required bytes are available, then manages AW/W/B independently of instruction progress. Impossible data requirements are faults, not an instruction to wait forever for unspecified future loads.
+
+**DMASTP:** adds peripheral acknowledgement context to the conditional store. The write's B-retirement path supplies completion into peripheral control; external DA acceptance can occur later. WFP permission, store admission, WLAST, B and DA must therefore be tracked as separate milestones.
+
+**DMASTZ:** use destination configuration but synthesize zero payload. It does not require a preceding DMALD or consume ordinary loaded source bytes as if they were its zero source. It still needs write-side admission, legal addresses/attributes, valid strobes and normal response retirement. Refer to section 9.1 for a complete sequence.
+
+For all these instructions, the single-beat S form overrides burst count, not byte-lane rules or the beat-size field. A condition-false instruction does not create an AXI transaction merely because its mnemonic appears in a waveform's opcode row.
+
+### 17.10 Loops: deciding the next instruction address
+
+**DMALP:** load LC0 or LC1 with the encoded N−1 count and progress through UPC. It does not itself transfer one row or one burst; its body supplies that work. Initializing a loop counter again inside an unintended nesting arrangement changes the program's behavior even if both instructions are individually legal.
+
+**Finite DMALPEND:** evaluate the optional request condition. A false condition falls through. For a matching condition with the selected counter nonzero, decrement the counter and select the backward target; when the counter is zero, select the sequential instruction. The branch decision is made during execution and the target commits in UPC. Thus the final body iteration is not inferred solely from a counter display of zero.
+
+**DMALPFE/forever-form end:** DMALPFE emits no opcode. The associated non-finite loop end uses request_last to decide whether to branch; it does not consume a finite loop count to determine the total job length. The final request still needs its matching S/B data operations before the loop exits. Follow the Arm restriction against adding S/B to the loop end of a DMALPFE-started loop.
+
+The backward displacement is a byte distance, not an instruction count. A six-byte MOV in the body affects that distance differently from a one-byte LD. A decoded branch target inside an immediate field can turn valid original bytes into an undefined instruction stream.
+
+### 17.11 Wait, barrier and synchronization instructions
+
+**DMAWFP:** validate peripheral permissions, capture its identifier/mode and enter WFP. Wait for the peripheral controller's grant, then record the appropriate request flags and select UPC. It does not move payload by itself. A pending request can make the wait short; a wrong request type can be consumed/retained differently depending on the mode rather than being treated as a universal grant.
+
+**DMAWFE:** validate the selected event, optionally request thread-local instruction invalidation and enter WFE. Keep the instruction PC while waiting. On a matching event-mode flag, select UPC; the event unit performs the consumption/broadcast behavior described in section 11.4. This is valid in manager/channel memory programs, but it is not part of the general real-time debug injection subset.
+
+**DMASEV:** validate resource/security and set the selected event/interrupt flag during execution, then progress to the next instruction. SEV does not implicitly wait for previously submitted data. Use the appropriate producer barrier before SEV when the notification promises completed data. For an interrupt-routed resource, software acknowledgement is through INTCLR, not WFE.
+
+**DMARMB:** enter BARRIER and wait until the channel's prior reads have retired. Then select UPC. It does not require every write or another channel's traffic to be idle.
+
+**DMAWMB:** enter BARRIER and wait until the channel's prior writes have retired. Then select UPC. WLAST alone does not meet that requirement while B/retirement work remains. It is not a CPU cache-maintenance instruction.
+
+**DMAFLUSHP:** enter the flush form of BARRIER, drain both read and write work, then submit the flush through flush_valid/flush_ready. Acceptance clears the channel's request flags and permits UPC. Peripheral control continues the external DA/DR flush exchange separately. The channel finishing this instruction does not turn the pending external handshake into an already completed response. Section 11.3 gives the complete exchange.
+
+### 17.12 Launch and termination instructions
+
+**DMAGO:** the manager validates channel number and launch security, then presents GO/PC/NS to the target. A stopped target starts fetching its own program; an already-active target is not restarted. The manager's instruction can finish while the target still waits for code. There is no matching channel-instruction version that starts another channel by executing GO in its data program.
+
+**DMAEND in a channel:** enter COMPLETING without ordinary fault/kill cancellation, let channel data work retire, perform the thread's lifecycle maintenance and reach Stopped. END does not generate a completion event by itself and does not mean all MFIFO residual bytes will be written somewhere. **DMAEND in the manager** stops the manager program without waiting for all channels it launched.
+
+**DMAKILL in a channel or through channel-directed debug:** enter KILLING, cancel what remains cancelable, preserve committed external obligations and wait for dp_idle before Stopped. **Manager DMAKILL** stops/recovers that manager context; it is not a broadcast kill. Neither form is a lossless save/resume or rollback operation. Section 13.1 distinguishes planned waits, cancellation and restart policy.
+
+Taken together, these contracts explain why “the instruction finished,” “the channel stopped” and “the destination is available to software” are different statements. A complete flow identifies the operation and the observation that establishes each one.
 
 ## 18. Register map, access and bit fields
 
@@ -715,6 +978,8 @@ TRM Tables 3-15 and 3-16 define the following cause fields. Set bits form a bitm
 All remaining FTRD/FTRn positions are reserved/undefined in this revision. EXOKAY, SLVERR and DECERR all count as error responses for these DMA accesses; the controller does not initiate an exclusive sequence that would make EXOKAY a normal successful exclusive result.
 
 The workspace reuses `ch_rdwr_err` for certain unsupported/illegal transfer settings as well; consult the actual legality checks when diagnosing this RTL. Do not extrapolate such extended interpretations into a new Arm architectural cause definition. FARn is also an extension: it helps identify a failing address but does not make an imprecise abort precise.
+
+**Source-consistency note:** DDI 0424D §2.8.2's general list describes insufficient prior loads among imprecise abort sources, while Table 3-16 explicitly marks `st_data_unavailable` as precise. This document follows the field-specific table for bit 13 and the current directed probe checks the offending store PC. The wording difference is retained here so the table is not mistaken for evidence that the supplied manual is internally uniform. Data-bus errors remain imprecise; the note does not change their interpretation.
 
 ### 18.6 SARn, DARn and loop counters
 
@@ -889,6 +1154,23 @@ While waiting, the old register value remains in effect and CPC remains on the M
 Explicit barriers are still required for dependencies not covered by the implicit tests. If a consumer must see a write before another instruction or thread proceeds, choose the synchronization sequence that expresses that requirement; do not rely on incidental queue latency.
 
 For swapping, the current legality checks additionally require DAR aligned to the group and a complete set of groups in an incrementing store's byte count. If the group spans destination beats, the destination must be INCR; a FIXED beat must itself accommodate whole groups. Buffering a 128-bit group on a 64-bit bus therefore does not make a 128-bit-group FIXED store legal on that bus. Invalid settings fault rather than requesting an unsupported AXI beat.
+
+### 19.6 Endian conversion: the source rules still matter
+
+Arm §2.11.2 requires **both SAR and DAR** to be aligned to the configured endian group before the relevant LD/ST operations. If a source uses FIXED addressing, its beat size must also accommodate the endian group; a FIXED destination has the corresponding destination restriction. Recheck those requirements after changing addresses or endian settings.
+
+The earlier DAR/group checks describe the current store-side legality path. Passing those checks is not proof that every source-side Arm programming restriction was dynamically enforced by that same block. Software must satisfy the complete source and destination rules; a permissive simulation result is not permission to write a nonportable program.
+
+Use byte order to verify the result. With input bytes in ascending address order:
+
+```text
+Input:          00 01 02 03  04 05 06 07
+2-byte groups:  01 00 03 02  05 04 07 06
+4-byte groups:  03 02 01 00  07 06 05 04
+8-byte group:   07 06 05 04  03 02 01 00
+```
+
+The group changes byte positions, not the number of useful payload bytes. A 16-byte group can span two eight-byte bus beats or more narrower beats, but it remains one permutation group. A write strobe identifies valid lanes after positioning; zero in an inactive lane is not an extra payload byte. The [128-bit-group operation](waveform/operations/23_swap128.md) checks complete output bytes rather than judging correctness from one hexadecimal word in isolation.
 
 ## 20. Software sequences and worked register values
 
@@ -1460,3 +1742,56 @@ For a real-time stream, characterize worst-case request service, buffer capacity
 Before declaring an operation understood, answer these questions: Who starts it? Which context owns the instruction? What makes the target channel eligible to launch? When are descriptors accepted? Which bytes and resources are promised? What external response retires the operation? What orders the notification? Who consumes the event? Which context owns a possible fault? What must software observe before reusing the channel or buffer?
 
 The manager–channel launch/event flow in section 23, the commitment stages in section 24 and the MFIFO budget in section 25 provide complementary answers. Together they explain both normal execution and why a controller can be protocol-correct yet still wait indefinitely because its program or system contract is incomplete.
+
+## 27. Function and operation coverage after review
+
+### 27.1 Where the main functions are explained
+
+This map is a documentation review aid, not functional-coverage or sign-off evidence. References in the last column lead to recorded operation examples; the absence of a new figure here does not mean a function requires no verification.
+
+| Main function / operation | Explanation in this document | Recorded example |
+|---|---|---|
+| Manager launch through APB debug | §§7.2, 20.2, 23.2–23.4 | [Launch](waveform/operations/01_launch.md). |
+| Aligned memory copy and ordered completion | §§9, 21.3, 24.1–24.2 | [Copy](waveform/operations/02_copy.md). |
+| Source/destination width conversion | §§4.2, 9.4, 19.4 | [Packing/unpacking](waveform/operations/03_packing.md). |
+| Unaligned transfer and exact tail | §§9.3, 19.4 | [Nineteen-byte copy](waveform/operations/04_unaligned.md). |
+| AXI 4 KB splitting | §§12, 19.4 | [Boundary split](waveform/operations/05_boundary.md). |
+| Fixed-address source/destination | §§2.1, 4.2, 11.1, 19.5 | [FIXED transfers](waveform/operations/06_fixed.md). |
+| Zero fill | §9.1 | [DMASTZ](waveform/operations/07_zero.md). |
+| Finite loops, strides and 2D layout | §§9.2, 17.4 | [Loops/2D](waveform/operations/08_loops.md). |
+| Endian group conversion | §§19.1, 19.6 | [Endian variants](waveform/operations/09_endian.md). |
+| Memory-to-peripheral | §§11.1, 17.5, 21.4 | [M2P](waveform/operations/10_m2p.md). |
+| Peripheral-to-memory | §§11.1, 17.3 | [P2M](waveform/operations/11_p2m.md). |
+| Single/burst selection and last request | §§17.3–17.5 | [Request types](waveform/operations/12_request_types.md). |
+| Event/interrupt synchronization | §§11.2, 11.4, 23.5 | [Late/sticky events](waveform/operations/13_events.md). |
+| Instruction cancellation/invalidation | §§6.2, 14.1, 23.6 | [Cache cancellation](waveform/operations/14_cache.md). |
+| Kill and lifecycle cleanup | §§13.1, 20.3, 23.9 | [Kill](waveform/operations/15_kill.md). |
+| Precise/imprecise diagnosis | §§13, 18.5, 20.4 | [Fault cases](waveform/operations/16_faults.md). |
+| Multiple channels and MFIFO admission | §§6.3, 24.2, 25 | [Sharing](waveform/operations/17_sharing.md). |
+| Secure/non-secure execution | §§14, 18.1, 19.2, 23.8 | [NS execution](waveform/operations/18_security.md). |
+| Peripheral clock crossing | §§14, 24.3 | [CDC](waveform/operations/19_cdc.md). |
+| Sleep entry and wakeup | §14.2 | [Q-Channel](waveform/operations/20_lowpower.md). |
+| Channel fast path and Arm status | §§10.2, 21.1–21.2 | [Thread phases](waveform/operations/21_thread_phases.md). |
+| Implicit discontinuity ordering | §§19.5, 21.5 | [Reconfiguration](waveform/operations/22_reconfiguration.md). |
+| 128-bit groups across narrow beats | §§19.6, 25.1 | [Wide swap](waveform/operations/23_swap128.md). |
+| CCR permission check before commit | §§19.2, 21.6 | [CCR security fault](waveform/operations/24_ccr_permissions.md). |
+
+The manager boot/debug return paths, explicit peripheral flush exchange, reset/restart policy and resource-budget analysis are described from the supplied specification and RTL in addition to the selected timing gallery. The six embedded pictures in section 21 do not independently establish every case in this table.
+
+### 27.2 Capabilities that must not be inferred from the overview
+
+| Potential assumption | Actual scope of this document/design |
+|---|---|
+| “DMA” means arbitrary data processing | The documented transformations are byte positioning, packing/unpacking, endian grouping and zero generation. There is no documented microcode arithmetic engine for CRC, encryption or compression. |
+| Any DMA automatically walks a scatter-gather descriptor ring | This is an instruction-driven controller. Segment translation/submission needs the programming/orchestration described in §24.4. |
+| A bus-visible peripheral address automatically proves a complete peripheral-to-peripheral feature | Such a program needs compatible source/destination pacing, byte counts and acknowledgement semantics. No dedicated end-to-end P2P example is established by this overview. |
+| An ordinary copy is overlap-safe or atomic | Neither property follows from its name. Direction, chunking, side effects and visibility need a proved program/system contract. |
+| WFE is a generic hardware pause and GO resumes it | WFE is an event wait; GO to an active channel does not restart it. Kill/relaunch is a different lifecycle. |
+| Correct current timing is an Arm-required fixed latency | FIFO depth, arbitration, memory service, CDC phase and the local-hit optimization affect observations. Architectural state codes are not cycle counts. |
+| Passing the described simulations proves all legal Arm programs | The recorded examples and assertions provide evidence for their scope. They are not exhaustive formal proof, system coherency sign-off or CDC metastability analysis. |
+
+### 27.3 Scope of this review update
+
+This update fills operation-level explanation gaps with exact-length/tail, zero-fill, stride, flush, multi-waiter, code-publication and sleep/restart flows. It also adds explicit instruction execution contracts and channel/manager state entry/hold/exit conditions. Two source-sensitive details are clarified: endian programming must satisfy the Arm source rules as well as destination legality checks, and the supplied manual's general abort list and field-specific st_data_unavailable classification have different wording. It adds worked arithmetic and protocol sequencing without changing the RTL, existing testbenches or saved timing data.
+
+New explanatory code layouts are labeled as examples rather than claimed as newly simulated programs. Existing waveform links continue to reference their recorded source runs and byte-value tables. Future RTL changes should trigger a new source-baseline check and waveform regeneration before treating this documentation as timing evidence for the new revision.
